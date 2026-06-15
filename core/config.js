@@ -18,8 +18,8 @@ const DEFAULT_CONFIG = {
   search_garbage_keywords: ['666', '关注', '互粉', '点赞', '好看'],
   // 监控博主列表（每个博主有独立的 intent/garbage keywords + time_ranges）
   monitor_bloggers: [],
-  // 搜索定时任务
-  search_schedule: { enable: false, interval: 30, unit: 60, hours: '08:00-22:00' },
+  // 搜索定时任务（scheduler 使用 enabled/startHour/endHour/intervalMinutes）
+  search_schedule: { enabled: false, startHour: 8, endHour: 22, intervalMinutes: 30, interval: 30, unit: 60, hours: '08:00-22:00' },
   email: { enable: false, smtp_server: 'smtp.qq.com', smtp_port: 465, sender: '', auth_code: '', receivers: '' },
   wechat: { enable: false, webhook_url: '' }
 };

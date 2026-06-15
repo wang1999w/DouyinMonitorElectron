@@ -105,21 +105,47 @@ function mergeCommentData(cdp, dom) {
   };
 }
 
+// 内存 Set 兜底（数据库未就绪时仍能去重）
+const localDedupe = new Set();
+const MAX_LOCAL = 20000;
+
 /**
- * 简单去重（基于昵称+评论内容+日期）
+ * 去重（数据库为主，内存 Set 兜底）
+ * 优先用数据库（持久化跨进程），fallback 到内存
  */
 function isDuplicate(comment) {
   const today = new Date().toISOString().slice(0, 10);
-  const key = `${comment.nickname}|${comment.text}|${today}`;
-  if (!isDuplicate._set) isDuplicate._set = new Set();
-  if (isDuplicate._set.has(key)) return true;
-  isDuplicate._set.add(key);
+  const key = `${comment.nickname || ''}|${comment.text || ''}|${today}`;
 
-  // 定期清理
-  if (isDuplicate._set.size > 10000) {
-    isDuplicate._set.clear();
+  // 1) 数据库去重
+  if (database && database.isCommentExists) {
+    try {
+      if (database.isCommentExists(comment)) {
+        return true;
+      }
+    } catch (e) {
+      // 数据库不可用时继续用内存
+    }
+  }
+
+  // 2) 内存 Set 兜底
+  if (localDedupe.has(key)) return true;
+  localDedupe.add(key);
+
+  if (localDedupe.size > MAX_LOCAL) {
+    // 清理一半
+    const arr = Array.from(localDedupe);
+    localDedupe.clear();
+    arr.slice(arr.length / 2).forEach(k => localDedupe.add(k));
   }
   return false;
+}
+
+/**
+ * 重置内存去重（切任务时调用）
+ */
+function resetDedupe() {
+  localDedupe.clear();
 }
 
 /**
@@ -169,4 +195,4 @@ function formatTime(ts) {
   }
 }
 
-module.exports = { processComment, formatNotifyMessage };
+module.exports = { processComment, formatNotifyMessage, isDuplicate, resetDedupe };

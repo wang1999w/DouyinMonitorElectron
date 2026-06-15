@@ -8,9 +8,11 @@
 (function () {
   let selectedBloggerIdx = -1;
   let currentBloggers = [];
+  let editMode = false; // false=添加, true=编辑
 
   function initMonitor() {
-    document.getElementById('btn-monitor-add').addEventListener('click', showAddBloggerModal);
+    document.getElementById('btn-monitor-add').addEventListener('click', () => showAddBloggerModal(false));
+    document.getElementById('btn-monitor-edit').addEventListener('click', () => showAddBloggerModal(true));
     document.getElementById('btn-monitor-del').addEventListener('click', delBlogger);
     document.getElementById('btn-monitor-start').addEventListener('click', startMonitor);
     document.getElementById('btn-monitor-stop').addEventListener('click', stopMonitor);
@@ -20,8 +22,19 @@
       appendTaskLog('monitor', msg);
     });
     window.electronAPI.onMonitorResult((result) => addMonitorResult(result));
+    // 事件驱动进度
+    document.addEventListener('monitor-progress', (e) => applyMonitorProgress(e.detail));
 
     loadBloggerList();
+  }
+
+  function applyMonitorProgress(p) {
+    if (!p) return;
+    // 监控没有进度条，落到状态栏
+    if (typeof p.matchedTotal === 'number') {
+      const el = document.getElementById('search-status');
+      if (el) el.textContent = `监控已命中 ${p.matchedTotal} 条`;
+    }
   }
 
   async function loadBloggerList() {
@@ -60,20 +73,47 @@
   }
 
   /**
-   * 显示添加博主模态框
-   * 包含：昵称、sec_uid、时段、意向关键词、垃圾关键词
+   * 显示添加博主模态框（同时支持编辑）
+   * @param {boolean} edit - true=编辑当前选中, false=添加新博主
    */
-  async function showAddBloggerModal() {
+  async function showAddBloggerModal(edit = false) {
+    if (edit && selectedBloggerIdx < 0) {
+      window.Toast && window.Toast.warn('请先选中要编辑的博主');
+      return;
+    }
+    editMode = edit;
     await window.electronAPI.hideDouyinView();
     let modal = document.getElementById('blogger-modal');
     if (!modal) { modal = createBloggerModal(); document.body.appendChild(modal); }
-    // 清空表单
-    document.getElementById('bm-nickname').value = '';
-    document.getElementById('bm-secuid').value = '';
-    document.getElementById('bm-times').value = '09:00\n14:00';
-    document.getElementById('bm-intent-kw').value = '';
-    document.getElementById('bm-garbage-kw').value = '';
-    document.getElementById('bm-days').value = '7';
+
+    const titleEl = modal.querySelector('h3');
+    if (titleEl) titleEl.textContent = edit ? '编辑博主' : '添加监控博主';
+
+    if (edit) {
+      const b = currentBloggers[selectedBloggerIdx];
+      document.getElementById('bm-nickname').value = b.nickname || '';
+      document.getElementById('bm-secuid').value = b.sec_uid || '';
+      document.getElementById('bm-secuid').disabled = true; // 编辑时不允许改 sec_uid
+      document.getElementById('bm-times').value = (b.trigger_times || []).join('\n');
+      document.getElementById('bm-intent-kw').value = (b.intent_keywords || []).join('\n');
+      document.getElementById('bm-garbage-kw').value = (b.garbage_keywords || []).join('\n');
+      const hours = b.comment_hours || 60;
+      document.getElementById('bm-comment-hours').value = hours >= 60 && hours % 60 === 0 ? hours / 60 : hours;
+      document.getElementById('bm-comment-unit').value = hours >= 60 && hours % 60 === 0 ? 60 : 1;
+      document.getElementById('bm-days').value = String(b.date_value || 7);
+      document.getElementById('bm-status').checked = b.status !== 0;
+    } else {
+      document.getElementById('bm-nickname').value = '';
+      document.getElementById('bm-secuid').value = '';
+      document.getElementById('bm-secuid').disabled = false;
+      document.getElementById('bm-times').value = '09:00\n14:00';
+      document.getElementById('bm-intent-kw').value = '';
+      document.getElementById('bm-garbage-kw').value = '';
+      document.getElementById('bm-comment-hours').value = 60;
+      document.getElementById('bm-comment-unit').value = 1;
+      document.getElementById('bm-days').value = '7';
+      document.getElementById('bm-status').checked = true;
+    }
     modal.style.display = 'flex';
   }
 
@@ -124,6 +164,10 @@
           </div>
         </div>
 
+        <div style="margin-bottom:10px;">
+          <label style="font-size:12px;color:#666;"><input type="checkbox" id="bm-status" checked> 启用监控（取消勾选 = 暂停）</label>
+        </div>
+
         <div style="display:flex;gap:12px;margin-bottom:10px;">
           <div style="flex:1;">
             <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">意向关键词 <span style="color:#999;">（每行一个）</span></label>
@@ -155,22 +199,42 @@
       const garbageStr = document.getElementById('bm-garbage-kw').value.trim();
       const days = parseInt(document.getElementById('bm-days').value) || 7;
       const commentHours = (parseInt(document.getElementById('bm-comment-hours').value) || 60) * (parseInt(document.getElementById('bm-comment-unit').value) || 1);
+      const status = document.getElementById('bm-status').checked ? 1 : 0;
 
-      if (!secUid) { alert('请填写博主 sec_uid'); return; }
-      if (!timesStr) { alert('请至少填写一个触发时间点'); return; }
+      if (!secUid) { window.Toast && window.Toast.warn('请填写博主 sec_uid'); return; }
+      if (!timesStr) { window.Toast && window.Toast.warn('请至少填写一个触发时间点'); return; }
 
-      const blogger = {
-        sec_uid: secUid,
-        nickname: nickname || '未命名',
-        trigger_times: timesStr.split('\n').map(s => s.trim()).filter(Boolean),
-        intent_keywords: intentStr ? intentStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
-        garbage_keywords: garbageStr ? garbageStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
-        comment_hours: commentHours,
-        date_value: days,
-        status: 1
-      };
+      let result;
+      if (editMode) {
+        const updates = {
+          nickname: nickname || '未命名',
+          trigger_times: timesStr.split('\n').map(s => s.trim()).filter(Boolean),
+          intent_keywords: intentStr ? intentStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
+          garbage_keywords: garbageStr ? garbageStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
+          comment_hours: commentHours,
+          date_value: days,
+          status
+        };
+        result = await window.electronAPI.updateBlogger({ secUid, updates });
+      } else {
+        const blogger = {
+          sec_uid: secUid,
+          nickname: nickname || '未命名',
+          trigger_times: timesStr.split('\n').map(s => s.trim()).filter(Boolean),
+          intent_keywords: intentStr ? intentStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
+          garbage_keywords: garbageStr ? garbageStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
+          comment_hours: commentHours,
+          date_value: days,
+          status
+        };
+        result = await window.electronAPI.addBlogger(blogger);
+      }
 
-      await window.electronAPI.addBlogger(blogger);
+      if (result && result.success) {
+        window.Toast && window.Toast.success(editMode ? '博主已更新' : '博主已添加');
+      } else {
+        window.Toast && window.Toast.error((result && result.error) || '保存失败');
+      }
       closeModal();
       loadBloggerList();
     });
@@ -185,9 +249,10 @@
   }
 
   async function delBlogger() {
-    if (selectedBloggerIdx < 0) { alert('请先选择一个博主'); return; }
+    if (selectedBloggerIdx < 0) { window.Toast && window.Toast.warn('请先选择一个博主'); return; }
     if (!confirm('确定删除选中的博主吗？')) return;
-    await window.electronAPI.delBlogger(selectedBloggerIdx);
+    const target = currentBloggers[selectedBloggerIdx];
+    await window.electronAPI.delBlogger(target ? target.sec_uid : selectedBloggerIdx);
     selectedBloggerIdx = -1;
     loadBloggerList();
   }
@@ -195,7 +260,7 @@
   async function startMonitor() {
     const cfg = await window.electronAPI.getConfig();
     if (!cfg.monitor_bloggers || cfg.monitor_bloggers.length === 0) {
-      alert('请先添加监控博主');
+      window.Toast && window.Toast.warn('请先添加监控博主');
       return;
     }
     setMonitorRunning(true);

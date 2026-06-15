@@ -6,33 +6,33 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('electronAPI', {
-  // ========== 主进程 → 渲染进程（事件监听） ==========
-  onRequestData: (cb) => ipcRenderer.on('request-data', (_, data) => cb(data)),
-  onSearchLog: (cb) => ipcRenderer.on('search-log', (_, msg) => cb(msg)),
-  onSearchResult: (cb) => ipcRenderer.on('search-result', (_, r) => cb(r)),
-  onMonitorLog: (cb) => ipcRenderer.on('monitor-log', (_, msg) => cb(msg)),
-  onMonitorResult: (cb) => ipcRenderer.on('monitor-result', (_, r) => cb(r)),
-  onStatsUpdated: (cb) => ipcRenderer.on('stats-updated', (_, s) => cb(s)),
-  onConfigUpdated: (cb) => ipcRenderer.on('config-updated', (_, c) => cb(c)),
-  onWechatSent: (cb) => ipcRenderer.on('wechat-sent', (_, r) => cb(r)),
-  onResizePanel: (cb) => ipcRenderer.on('resize-panel', (_, s) => cb(s)),
-  onErrorNotify: (cb) => ipcRenderer.on('error-notify', (_, msg) => cb(msg)),
+const SAFE_EVENTS = [
+  'request-data', 'search-log', 'search-result', 'search-progress',
+  'monitor-log', 'monitor-result', 'monitor-progress',
+  'stats-updated', 'config-updated', 'wechat-sent', 'resize-panel',
+  'error-notify', 'database-error', 'scheduler-log'
+];
 
-  // ========== 渲染进程 → 主进程（invoke 调用） ==========
-  startSearch: (params) => ipcRenderer.invoke('start-search', params),
-  stopSearch: () => ipcRenderer.invoke('stop-search'),
-  pauseSearch: () => ipcRenderer.invoke('pause-search'),
-  startMonitor: () => ipcRenderer.invoke('start-monitor'),
-  stopMonitor: () => ipcRenderer.invoke('stop-monitor'),
-  getConfig: () => ipcRenderer.invoke('get-config'),
-  saveConfig: (cfg) => ipcRenderer.invoke('save-config', cfg),
-  addBlogger: (b) => ipcRenderer.invoke('add-blogger', b),
-  delBlogger: (id) => ipcRenderer.invoke('del-blogger', id),
-  exportResults: () => ipcRenderer.invoke('export-results'),
-  sendTestEmail: () => ipcRenderer.invoke('send-test-email'),
-  sendTestWechat: () => ipcRenderer.invoke('send-test-wechat'),
-  getStats: () => ipcRenderer.invoke('get-stats'),
-  showDouyinView: () => ipcRenderer.invoke('show-douyin-view'),
-  hideDouyinView: () => ipcRenderer.invoke('hide-douyin-view')
+const SAFE_INVOKES = [
+  'start-search', 'stop-search', 'pause-search',
+  'start-monitor', 'stop-monitor',
+  'get-config', 'save-config',
+  'add-blogger', 'update-blogger', 'del-blogger',
+  'export-results', 'send-test-email', 'send-test-wechat',
+  'get-stats', 'get-matches-page', 'clear-matches',
+  'show-douyin-view', 'hide-douyin-view'
+];
+
+const api = {};
+
+SAFE_EVENTS.forEach((evt) => {
+  const camel = 'on' + evt.split('-').map(s => s[0].toUpperCase() + s.slice(1)).join('');
+  api[camel] = (cb) => ipcRenderer.on(evt, (_, data) => cb(data));
 });
+
+SAFE_INVOKES.forEach((name) => {
+  const camel = name.split('-').map((s, i) => i === 0 ? s : s[0].toUpperCase() + s.slice(1)).join('');
+  api[camel] = (...args) => ipcRenderer.invoke(name, ...args);
+});
+
+contextBridge.exposeInMainWorld('electronAPI', api);

@@ -1,14 +1,25 @@
 /**
- * IPC 通信注册模块
+ * IPC 通信注册模块（重构版）
+ *
  * 负责：注册所有主进程 ↔ 渲染进程的 IPC 事件处理
  * 使用 ipcMain.handle 处理渲染进程的 invoke 请求
+ *
+ * 重构要点：
+ *   - addBlogger 按 sec_uid 查重
+ *   - 博主支持编辑（updateBlogger）
+ *   - stats-updated 定时主动推送给渲染进程
+ *   - 导出改为分页流式写入，避免 OOM
+ *   - 所有 list 查询支持分页
  */
 
 const { ipcMain, dialog, app } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const fsp = fs.promises;
+const { getLogger } = require('../core/logger');
 
-/** 延迟加载 core 模块，避免启动时循环依赖 */
+const logger = getLogger('IPC');
+
 let database = null;
 let config = null;
 let matchModule = null;
@@ -17,6 +28,7 @@ let wechatModule = null;
 let notifier = null;
 let searchEngine = null;
 let monitorEngine = null;
+let statsTimer = null;
 
 function loadCoreModules() {
   if (!database) {
@@ -34,10 +46,10 @@ function loadCoreModules() {
 
 /**
  * 注册所有 IPC 处理器
- * @param {BrowserWindow} mainWindow - 主窗口实例
+ * @param {BrowserWindow} mainWindow
  */
 function registerIpcHandlers(mainWindow) {
-  // ========== 配置相关 ==========
+  // ========== 配置 ==========
   ipcMain.handle('get-config', () => {
     loadCoreModules();
     return config.loadConfig();
@@ -50,7 +62,7 @@ function registerIpcHandlers(mainWindow) {
     return { success: true };
   });
 
-  // ========== 统计数据 ==========
+  // ========== 统计 ==========
   ipcMain.handle('get-stats', () => {
     loadCoreModules();
     return database.getStats();
@@ -61,28 +73,47 @@ function registerIpcHandlers(mainWindow) {
     loadCoreModules();
     const cfg = config.loadConfig();
     cfg.monitor_bloggers = cfg.monitor_bloggers || [];
+    if (blogger.sec_uid) {
+      const exists = cfg.monitor_bloggers.some(b => b.sec_uid === blogger.sec_uid);
+      if (exists) return { success: false, error: '该博主已在监控列表中' };
+    }
     cfg.monitor_bloggers.push(blogger);
     config.saveConfig(cfg);
     return { success: true };
   });
 
-  ipcMain.handle('del-blogger', (event, index) => {
+  ipcMain.handle('update-blogger', (event, { secUid, updates }) => {
     loadCoreModules();
     const cfg = config.loadConfig();
-    if (cfg.monitor_bloggers && cfg.monitor_bloggers[index]) {
-      cfg.monitor_bloggers.splice(index, 1);
-      config.saveConfig(cfg);
-    }
+    cfg.monitor_bloggers = cfg.monitor_bloggers || [];
+    const idx = cfg.monitor_bloggers.findIndex(b => b.sec_uid === secUid);
+    if (idx < 0) return { success: false, error: '博主不存在' };
+    cfg.monitor_bloggers[idx] = { ...cfg.monitor_bloggers[idx], ...updates };
+    config.saveConfig(cfg);
     return { success: true };
   });
 
-  // ========== 搜索相关 ==========
+  ipcMain.handle('del-blogger', (event, identifier) => {
+    loadCoreModules();
+    const cfg = config.loadConfig();
+    if (!cfg.monitor_bloggers) return { success: true };
+    if (typeof identifier === 'number') {
+      if (cfg.monitor_bloggers[identifier]) cfg.monitor_bloggers.splice(identifier, 1);
+    } else if (typeof identifier === 'string') {
+      cfg.monitor_bloggers = cfg.monitor_bloggers.filter(b => b.sec_uid !== identifier);
+    }
+    config.saveConfig(cfg);
+    return { success: true };
+  });
+
+  // ========== 搜索 ==========
   ipcMain.handle('start-search', (event, params) => {
     loadCoreModules();
     searchEngine.startSearch(
       params,
       (msg) => mainWindow.webContents.send('search-log', msg),
-      (result) => mainWindow.webContents.send('search-result', result)
+      (result) => mainWindow.webContents.send('search-result', result),
+      (progress) => mainWindow.webContents.send('search-progress', progress)
     );
     return { success: true };
   });
@@ -99,11 +130,12 @@ function registerIpcHandlers(mainWindow) {
     return { success: true };
   });
 
-  // ========== 监控相关 ==========
+  // ========== 监控 ==========
   ipcMain.handle('start-monitor', () => {
     loadCoreModules();
     monitorEngine.startMonitor(
-      (msg) => mainWindow.webContents.send('monitor-log', msg)
+      (msg) => mainWindow.webContents.send('monitor-log', msg),
+      (progress) => mainWindow.webContents.send('monitor-progress', progress)
     );
     return { success: true };
   });
@@ -114,27 +146,41 @@ function registerIpcHandlers(mainWindow) {
     return { success: true };
   });
 
-  // ========== 导出 ==========
-  ipcMain.handle('export-results', async () => {
+  // ========== 意向评论查询（分页） ==========
+  ipcMain.handle('get-matches-page', (event, { offset, limit, filter }) => {
+    loadCoreModules();
+    return {
+      items: database.getRecentMatchesPage(offset || 0, limit || 50, filter || {}),
+      total: database.getMatchesCount(filter || {})
+    };
+  });
+
+  ipcMain.handle('clear-matches', () => {
+    loadCoreModules();
+    database.clearIntentComments();
+    return { success: true };
+  });
+
+  // ========== 导出（流式分页） ==========
+  ipcMain.handle('export-results', async (event, { filter } = {}) => {
     loadCoreModules();
     const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
       title: '导出意向评论',
       defaultPath: `意向评论_${new Date().toISOString().slice(0, 10)}.xlsx`,
       filters: [{ name: 'Excel 文件', extensions: ['xlsx'] }]
     });
-
-    if (canceled || !filePath) return { success: false };
+    if (canceled || !filePath) return { success: false, canceled: true };
 
     try {
-      const results = database.getRecentMatches(10000);
-      await exportToExcel(results, filePath);
+      await exportToExcelStream(filter || {}, filePath);
       return { success: true, path: filePath };
     } catch (err) {
+      logger.error(`导出失败: ${err.message}`);
       return { success: false, error: err.message };
     }
   });
 
-  // ========== 邮件测试 ==========
+  // ========== 邮件 / 企微 测试 ==========
   ipcMain.handle('send-test-email', async () => {
     loadCoreModules();
     try {
@@ -146,7 +192,6 @@ function registerIpcHandlers(mainWindow) {
     }
   });
 
-  // ========== 企微测试 ==========
   ipcMain.handle('send-test-wechat', async () => {
     loadCoreModules();
     try {
@@ -158,32 +203,47 @@ function registerIpcHandlers(mainWindow) {
     }
   });
 
-  // ========== BrowserView 显示/隐藏（模态框用） ==========
+  // ========== BrowserView 显隐（模态框） ==========
   const { getDouyinView } = require('./window');
 
   ipcMain.handle('hide-douyin-view', () => {
     const view = getDouyinView();
-    if (view) {
-      try { mainWindow.removeBrowserView(view); } catch (e) {}
-    }
+    if (view) { try { mainWindow.removeBrowserView(view); } catch (e) {} }
     return { success: true };
   });
 
   ipcMain.handle('show-douyin-view', () => {
     const view = getDouyinView();
-    if (view) {
-      try { mainWindow.setBrowserView(view); } catch (e) {}
-    }
+    if (view) { try { mainWindow.setBrowserView(view); } catch (e) {} }
     return { success: true };
   });
+
+  // ========== 启动 stats 主动推送 ==========
+  startStatsBroadcaster(mainWindow);
 }
 
 /**
- * 导出数据到 Excel 文件
- * @param {Array} data - 意向评论数据
- * @param {string} filePath - 输出文件路径
+ * 定时推送 stats 给渲染进程（5 秒一次）
  */
-async function exportToExcel(data, filePath) {
+function startStatsBroadcaster(mainWindow) {
+  if (statsTimer) clearInterval(statsTimer);
+  statsTimer = setInterval(() => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!database) return;
+    try {
+      mainWindow.webContents.send('stats-updated', database.getStats());
+    } catch (e) {}
+  }, 5000);
+}
+
+function stopStatsBroadcaster() {
+  if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+}
+
+/**
+ * 分页流式导出到 Excel（每页 500 条，避免大表 OOM）
+ */
+async function exportToExcelStream(filter, filePath) {
   const ExcelJS = require('exceljs');
   const workbook = new ExcelJS.Workbook();
   const sheet = workbook.addWorksheet('意向评论');
@@ -198,27 +258,45 @@ async function exportToExcel(data, filePath) {
     { header: 'IP属地', key: 'ip_label', width: 10 },
     { header: '所属博主', key: 'video_author', width: 15 },
     { header: '视频标题', key: 'video_title', width: 30 },
-    { header: '视频链接', key: 'video_url', width: 40 }
+    { header: '视频链接', key: 'video_url', width: 40 },
+    { header: '用户主页', key: 'profile_url', width: 40 },
+    { header: '采集时间', key: 'capture_time', width: 18 }
   ];
 
-  data.forEach(row => {
-    sheet.addRow({
-      score: row.score || 0,
-      nickname: row.nickname || '',
-      douyin_id: row.douyin_id || '',
-      comment_text: row.comment_text || '',
-      matched_keywords: row.matched_keywords || '',
-      comment_time: row.comment_time
-        ? new Date(row.comment_time * 1000).toLocaleString('zh-CN')
-        : '',
-      ip_label: row.ip_label || '',
-      video_author: row.video_author || '',
-      video_title: row.video_title || '',
-      video_url: row.video_url || ''
-    });
-  });
+  const PAGE = 500;
+  let offset = 0;
+  const total = database.getMatchesCount(filter);
+  let written = 0;
+
+  while (offset < total) {
+    const rows = database.getRecentMatchesPage(offset, PAGE, filter);
+    if (rows.length === 0) break;
+
+    for (const row of rows) {
+      sheet.addRow({
+        score: row.score || 0,
+        nickname: row.nickname || '',
+        douyin_id: row.douyin_id || '',
+        comment_text: row.comment_text || '',
+        matched_keywords: row.matched_keywords || '',
+        comment_time: row.comment_time
+          ? new Date(row.comment_time * 1000).toLocaleString('zh-CN') : '',
+        ip_label: row.ip_label || '',
+        video_author: row.video_author || '',
+        video_title: row.video_title || '',
+        video_url: row.video_url || '',
+        profile_url: row.profile_url || '',
+        capture_time: row.capture_time
+          ? new Date(row.capture_time * 1000).toLocaleString('zh-CN') : ''
+      });
+      written++;
+    }
+
+    offset += PAGE;
+  }
 
   await workbook.xlsx.writeFile(filePath);
+  logger.info(`导出完成：${written} 条 -> ${filePath}`);
 }
 
-module.exports = { registerIpcHandlers };
+module.exports = { registerIpcHandlers, stopStatsBroadcaster };

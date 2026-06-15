@@ -1,65 +1,83 @@
 /**
- * CDP 网络响应拦截器
+ * CDP 网络响应拦截器（重构版）
+ *
  * 通过 Chrome DevTools Protocol 拦截完整的 HTTP 响应体
  * 提取评论 API 的 JSON 数据，获取完整的用户信息
  *
  * 采集字段完整清单：
- * - comment_id   评论ID
- * - uid          用户ID
- * - nickname     用户名称
- * - text         评论内容
- * - ip_label     IP属地
- * - create_time  评论时间
- * - sec_uid      用户主页ID
- * - profile_url  用户主页链接
- * - aweme_id     视频ID
- * - author       博主名称
- * - desc         视频文案
- * - video_url    视频链接
+ *   comment_id   评论ID
+ *   uid          用户ID
+ *   nickname     用户名称
+ *   text         评论内容
+ *   ip_label     IP属地
+ *   create_time  评论时间
+ *   sec_uid      用户主页ID
+ *   profile_url  用户主页链接
+ *   aweme_id     视频ID
+ *   author       博主名称
+ *   desc         视频文案
+ *   video_url    视频链接
+ *
+ * 重构要点：
+ *   - 显式 beginCollect / endCollect 生命周期，避免 currentVideo/comments 跨视频泄漏
+ *   - LRU 淘汰所有评论缓存，防止内存无限增长
+ *   - debugger.on('detach') 监听，意外断开时自动清理状态
+ *   - processComment 数据去重使用 comment_id（API 可能分页返回）
  */
 
 const { getLogger } = require('./logger');
 const logger = getLogger('CDPInterceptor');
 
-/** 抖音评论 API 路径特征 */
 const COMMENT_API_PATTERNS = [
   '/comment/list',
   '/comment/list_reply'
 ];
 
-/** 抖音视频信息 API 路径特征 */
 const VIDEO_API_PATTERNS = [
   '/aweme/v1/web/aweme/detail',
   '/aweme/post'
 ];
 
-/** 搜索结果 API 路径特征 */
 const SEARCH_API_PATTERNS = [
   '/web/general/search/single',
   '/web/search/item'
 ];
 
+// 评论缓存最大保留视频数（LRU 淘汰）
+const MAX_CACHED_VIDEOS = 200;
+
 class CDPInterceptor {
   constructor() {
-    /** 按 aweme_id 存储的评论数据 */
+    /** @type {Object<string, Array>} aweme_id -> 评论列表 */
     this.comments = {};
+    /** 评论访问顺序（用于 LRU 淘汰） */
+    this.commentKeys = [];
     /** 搜索结果中的视频信息 */
     this.searchVideos = [];
-    /** 当前正在查看的视频信息 */
+    /** 当前正在查看的视频信息（每次 beginCollect 时清空） */
     this.currentVideo = null;
+    /** 采集目标 aweme_id（beginCollect 时设置） */
+    this.collectTarget = null;
     /** 已拦截的请求 ID 集合（防重复处理） */
     this.processedIds = new Set();
     /** 回调 */
     this.onComment = null;
     this.onVideo = null;
+    /** debugger 句柄 */
+    this._webContents = null;
+    this._messageHandler = null;
+    this._detachHandler = null;
   }
 
   /**
    * 启动 CDP 拦截
-   * @param {WebContents} webContents - BrowserView 的 webContents
+   * @param {WebContents} webContents
    */
   start(webContents) {
-    if (!webContents) return;
+    if (!webContents) {
+      logger.warn('CDP start 失败：webContents 为空');
+      return;
+    }
     if (webContents.debugger.isAttached()) {
       logger.warn('CDP 已连接，跳过重复 attach');
       return;
@@ -72,21 +90,56 @@ class CDPInterceptor {
       return;
     }
 
-    webContents.debugger.sendCommand('Network.enable', {});
-
-    webContents.debugger.on('message', (event, method, params) => {
+    this._webContents = webContents;
+    this._messageHandler = (event, method, params) => {
       if (method === 'Network.responseReceived') {
         this._handleResponseReceived(webContents, params);
       }
-    });
+    };
+    this._detachHandler = (event, reason) => {
+      logger.warn(`CDP 意外断开: ${reason}`);
+      this._cleanup();
+    };
 
+    webContents.debugger.on('message', this._messageHandler);
+    webContents.debugger.on('detach', this._detachHandler);
+
+    webContents.debugger.sendCommand('Network.enable', {});
     logger.info('CDP 拦截器已启动');
   }
 
   /**
-   * 处理网络响应
-   * 先匹配 URL，再获取响应体解析 JSON
+   * 开始采集某个视频的评论（videoProcessor 流程钩子）
+   * 清理上一次的 currentVideo，强制只接受目标视频的 video 响应
    */
+  beginCollect(awemeId) {
+    this.collectTarget = awemeId;
+    this.currentVideo = null;
+    if (awemeId) {
+      this._touchKey(awemeId);
+    }
+  }
+
+  /**
+   * 结束采集（videoProcessor 流程钩子）
+   */
+  endCollect(awemeId) {
+    if (this.collectTarget === awemeId) {
+      this.collectTarget = null;
+    }
+  }
+
+  _touchKey(awemeId) {
+    const idx = this.commentKeys.indexOf(awemeId);
+    if (idx >= 0) this.commentKeys.splice(idx, 1);
+    this.commentKeys.push(awemeId);
+    // LRU 淘汰
+    while (this.commentKeys.length > MAX_CACHED_VIDEOS) {
+      const old = this.commentKeys.shift();
+      delete this.comments[old];
+    }
+  }
+
   async _handleResponseReceived(webContents, params) {
     const { requestId, response } = params;
     const url = response.url;
@@ -94,7 +147,6 @@ class CDPInterceptor {
     if (this.processedIds.has(requestId)) return;
     this.processedIds.add(requestId);
 
-    // 防止集合过大
     if (this.processedIds.size > 5000) {
       const arr = Array.from(this.processedIds);
       this.processedIds = new Set(arr.slice(-2000));
@@ -110,39 +162,26 @@ class CDPInterceptor {
       const { body, base64Encoded } = await webContents.debugger.sendCommand(
         'Network.getResponseBody', { requestId }
       );
-
       if (!body) return;
 
       const text = base64Encoded ? Buffer.from(body, 'base64').toString('utf-8') : body;
       const data = JSON.parse(text);
 
-      if (isComment) {
-        this._parseCommentResponse(url, data);
-      }
-      if (isVideo) {
-        this._parseVideoResponse(data);
-      }
-      if (isSearch) {
-        this._parseSearchResponse(data);
-      }
+      if (isComment) this._parseCommentResponse(url, data);
+      if (isVideo) this._parseVideoResponse(data);
+      if (isSearch) this._parseSearchResponse(data);
     } catch (e) {
       // CDP 请求可能已过期，静默忽略
     }
   }
 
-  /**
-   * 解析评论 API 响应
-   * 提取完整评论数据：用户ID、昵称、评论内容、IP、时间、视频信息
-   */
   _parseCommentResponse(url, data) {
-    // 从 URL 提取 aweme_id
     let aid = '';
     try {
       const u = new URL(url);
       aid = u.searchParams.get('aweme_id') || '';
     } catch (e) {}
 
-    // 从响应体多层结构中提取评论数组
     let commentsData = [];
     if (data.comments) {
       commentsData = data.comments;
@@ -157,7 +196,6 @@ class CDPInterceptor {
       }
     }
 
-    // 从评论中补充 aweme_id
     if (!aid && commentsData.length > 0) {
       for (const c of commentsData) {
         if (c.aweme_id) { aid = c.aweme_id; break; }
@@ -166,7 +204,6 @@ class CDPInterceptor {
 
     if (!aid || commentsData.length === 0) return;
 
-    // 提取视频信息（从响应中可能携带）
     let videoDesc = '';
     let videoAuthor = '';
     if (data.aweme_info) {
@@ -174,9 +211,8 @@ class CDPInterceptor {
       videoAuthor = data.aweme_info.author?.nickname || '';
     }
 
-    if (!this.comments[aid]) {
-      this.comments[aid] = [];
-    }
+    this._touchKey(aid);
+    if (!this.comments[aid]) this.comments[aid] = [];
 
     for (const c of commentsData) {
       if (!c || typeof c !== 'object') continue;
@@ -205,26 +241,24 @@ class CDPInterceptor {
         video_author: videoAuthor,
         video_url: `https://www.douyin.com/video/${aid}`,
         digg_count: c.digg_count || 0,
-        reply_comment_total: c.reply_comment_total || 0
+        reply_comment_total: c.reply_comment_total || 0,
+        source: 'cdp'
       };
 
-      // 去重
       if (!this.comments[aid].some(c2 => c2.comment_id === comment.comment_id)) {
         this.comments[aid].push(comment);
         if (this.onComment) this.onComment(comment);
       }
     }
-
-    logger.info(`拦截评论: aweme_id=${aid}, 数量=${commentsData.length}, 累计=${this.comments[aid].length}`);
   }
 
-  /**
-   * 解析视频详情 API 响应
-   */
   _parseVideoResponse(data) {
     try {
       const aweme = data.aweme_detail || (data.data && data.data.aweme_detail);
       if (!aweme || !aweme.aweme_id) return;
+
+      // 只有在采集目标视频时才覆盖 currentVideo，避免跨视频污染
+      if (this.collectTarget && this.collectTarget !== aweme.aweme_id) return;
 
       this.currentVideo = {
         aweme_id: aweme.aweme_id,
@@ -240,14 +274,10 @@ class CDPInterceptor {
     } catch (e) {}
   }
 
-  /**
-   * 解析搜索结果 API 响应
-   */
   _parseSearchResponse(data) {
     try {
       const items = (data.data && data.data.data) || data.data || [];
       if (!Array.isArray(items)) return;
-
       for (const item of items) {
         const aw = item.aweme_info || item;
         if (aw && aw.aweme_id) {
@@ -262,50 +292,66 @@ class CDPInterceptor {
     } catch (e) {}
   }
 
-  /**
-   * 获取指定视频的所有评论
-   * @param {string} awemeId - 视频 ID
-   * @returns {Array} 评论列表
-   */
   getComments(awemeId) {
-    return this.comments[awemeId] || [];
+    if (awemeId) {
+      this._touchKey(awemeId);
+      return (this.comments[awemeId] || []).slice();
+    }
+    return [];
   }
 
-  /**
-   * 获取搜索到的视频列表
-   */
   getSearchVideos() {
     const videos = [...this.searchVideos];
     this.searchVideos = [];
     return videos;
   }
 
-  /**
-   * 清空指定视频的评论缓存
-   */
   clearComments(awemeId) {
     if (awemeId) {
-      this.comments[awemeId] = [];
+      delete this.comments[awemeId];
+      const idx = this.commentKeys.indexOf(awemeId);
+      if (idx >= 0) this.commentKeys.splice(idx, 1);
     } else {
       this.comments = {};
+      this.commentKeys = [];
     }
   }
 
   /**
    * 停止拦截
+   * @param {WebContents} webContents
    */
   stop(webContents) {
+    const wc = webContents || this._webContents;
     try {
-      if (webContents && webContents.debugger.isAttached()) {
-        webContents.debugger.sendCommand('Network.disable', {}).catch(() => {});
-        webContents.debugger.detach();
+      if (wc && !wc.isDestroyed && wc.isDestroyed()) return;
+      if (wc && wc.debugger && wc.debugger.isAttached()) {
+        wc.debugger.sendCommand('Network.disable', {}).catch(() => {});
+        wc.debugger.detach();
       }
     } catch (e) {
       logger.warn(`CDP 停止异常: ${e.message}`);
     }
-    this.comments = {};
-    this.searchVideos = [];
+    this._cleanup();
     logger.info('CDP 拦截器已停止');
+  }
+
+  _cleanup() {
+    this.comments = {};
+    this.commentKeys = [];
+    this.searchVideos = [];
+    this.currentVideo = null;
+    this.collectTarget = null;
+    this.processedIds = new Set();
+    if (this._webContents) {
+      try {
+        if (this._messageHandler) this._webContents.debugger.off('message', this._messageHandler);
+        if (this._detachHandler) this._webContents.debugger.off('detach', this._detachHandler);
+      } catch (e) {}
+    }
+    this._webContents = null;
+    this._messageHandler = null;
+    this._detachHandler = null;
   }
 }
 

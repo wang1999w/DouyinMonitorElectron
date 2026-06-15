@@ -1,33 +1,33 @@
 /**
- * 日志模块
- * 提供统一的日志接口，支持控制台输出和文件记录
+ * 日志模块（异步队列版）
+ *
+ * 重构要点：
+ *   - 文件写入异步化（流式 append），不阻塞调用方
+ *   - 队列缓冲：批量 flush，避免高频 fs 调用
+ *   - 优雅退出：flush() 在 app before-quit 时调用，保证缓冲数据落盘
+ *   - 按日切文件，过期文件不写
  */
 
 const fs = require('fs');
 const path = require('path');
 
-/** 日志级别 */
 const LEVELS = { DEBUG: 0, INFO: 1, WARN: 2, ERROR: 3 };
-
-/** 当前日志级别 */
 let currentLevel = LEVELS.INFO;
 
-/** 日志文件路径 */
 const LOG_DIR = path.join(__dirname, '..', 'logs');
 
-/**
- * 设置日志级别
- * @param {string} level - 'DEBUG'|'INFO'|'WARN'|'ERROR'
- */
+let pendingLines = [];
+let flushing = false;
+let flushTimer = null;
+let currentStream = null;
+let currentDate = null;
+const FLUSH_INTERVAL_MS = 1000;
+const FLUSH_THRESHOLD = 200;
+
 function setLevel(level) {
-  currentLevel = LEVELS[level.toUpperCase()] || LEVELS.INFO;
+  currentLevel = LEVELS[(level || 'INFO').toUpperCase()] || LEVELS.INFO;
 }
 
-/**
- * 获取指定名称的 logger
- * @param {string} name - 模块名称
- * @returns {Object} logger 对象 { info, warn, error, debug }
- */
 function getLogger(name) {
   return {
     info: (msg) => log('INFO', name, msg),
@@ -37,45 +37,83 @@ function getLogger(name) {
   };
 }
 
-/**
- * 写入日志
- * @param {string} level - 日志级别
- * @param {string} name - 模块名称
- * @param {string} msg - 日志消息
- */
 function log(level, name, msg) {
   if (LEVELS[level] < currentLevel) return;
 
   const time = new Date().toLocaleString('zh-CN');
-  const line = `[${time}] [${level}] [${name}] ${msg}`;
+  const safeMsg = typeof msg === 'string' ? msg : (() => { try { return JSON.stringify(msg); } catch (e) { return String(msg); } })();
+  const line = `[${time}] [${level}] [${name}] ${safeMsg}`;
 
-  // 控制台输出
-  if (level === 'ERROR') {
-    console.error(line);
+  if (level === 'ERROR') console.error(line);
+  else console.log(line);
+
+  // 内存队列
+  pendingLines.push(line);
+  if (pendingLines.length >= FLUSH_THRESHOLD) {
+    flushNow();
   } else {
-    console.log(line);
+    scheduleFlush();
   }
-
-  // 写入日志文件
-  writeToFile(line);
 }
 
-/**
- * 写入日志文件（按日期分文件）
- * @param {string} line - 日志行
- */
-function writeToFile(line) {
-  try {
+function scheduleFlush() {
+  if (flushTimer) return;
+  flushTimer = setTimeout(() => {
+    flushTimer = null;
+    flushNow();
+  }, FLUSH_INTERVAL_MS);
+}
+
+function getStreamForToday() {
+  const today = new Date().toISOString().slice(0, 10);
+  if (today !== currentDate) {
+    if (currentStream) {
+      try { currentStream.end(); } catch (e) {}
+    }
+    currentDate = today;
     if (!fs.existsSync(LOG_DIR)) {
       fs.mkdirSync(LOG_DIR, { recursive: true });
     }
+    const filePath = path.join(LOG_DIR, `${today}.log`);
+    currentStream = fs.createWriteStream(filePath, { flags: 'a' });
+    currentStream.on('error', (e) => {
+      // 单次写失败不影响后续
+      currentStream = null;
+    });
+  }
+  return currentStream;
+}
 
-    const date = new Date().toISOString().slice(0, 10);
-    const filePath = path.join(LOG_DIR, `${date}.log`);
-    fs.appendFileSync(filePath, line + '\n');
+function flushNow() {
+  if (flushing || pendingLines.length === 0) return;
+  flushing = true;
+  const lines = pendingLines;
+  pendingLines = [];
+  try {
+    const stream = getStreamForToday();
+    if (stream && stream.writable) {
+      stream.write(lines.join('\n') + '\n');
+    }
   } catch (e) {
-    // 日志写入失败不影响主流程
+    // 失败：把行放回去（最多重试 3 次）
+    if (lines.length < 5000) {
+      pendingLines.unshift(...lines);
+    }
+  } finally {
+    flushing = false;
   }
 }
 
-module.exports = { getLogger, setLevel };
+/**
+ * 应用退出前同步刷盘
+ */
+function flush() {
+  if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+  flushNow();
+  if (currentStream) {
+    try { currentStream.end(); } catch (e) {}
+    currentStream = null;
+  }
+}
+
+module.exports = { getLogger, setLevel, flush };

@@ -172,10 +172,21 @@ app.whenReady().then(() => {
   registerProtocolHandlers();
   initApp();
 
+  // 自检结果发送到渲染进程（等待窗口加载完成）
+  const envMsg = issues.length > 0
+    ? `环境自检完成，${issues.length}个问题: ${issues.join('; ')}`
+    : '环境自检通过 ✓';
+
+  if (mainWindow) {
+    mainWindow.webContents.on('did-finish-load', () => {
+      mainWindow.webContents.send('search-log', `[系统] ${envMsg}`);
+    });
+  }
+
   const scheduler = require('../core/scheduler');
   scheduler.init((msg) => {
     if (mainWindow && mainWindow.webContents) {
-      mainWindow.webContents.send('search-log', msg);
+      mainWindow.webContents.send('scheduler-log', msg);
     }
   });
 
@@ -195,5 +206,25 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
+  // 退出前刷盘：日志、数据库
+  try {
+    const logger = require('../core/logger');
+    logger.flush();
+    const database = require('../core/database');
+    if (database && database.flushDatabase) database.flushDatabase().catch(() => {});
+    const { stopStatsBroadcaster } = require('./ipc');
+    if (stopStatsBroadcaster) stopStatsBroadcaster();
+  } catch (e) {
+    console.error('退出时清理失败:', e.message);
+  }
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  try {
+    const logger = require('../core/logger');
+    logger.flush();
+    const database = require('../core/database');
+    if (database && database.flushDatabase) database.flushDatabase().catch(() => {});
+  } catch (e) {}
 });

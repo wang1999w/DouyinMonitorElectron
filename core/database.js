@@ -1,24 +1,37 @@
 /**
- * SQLite 数据库操作模块
- * 使用 sql.js（纯 JS 实现）替代 better-sqlite3（需要原生编译）
+ * SQLite 数据库操作模块（重构版）
+ *
+ * 使用 sql.js（纯 JS 实现）替代 better-sqlite3（避免原生编译）
  * 复用原 Python 项目表结构，保持兼容性
+ *
+ * 重构要点：
+ *   - 写盘改为异步 + 队列，避免阻塞主进程
+ *   - saveToDisk 失败时通过 notifier 推送告警
+ *   - getStats 合并为单次 SUM/CASE 查询
+ *   - schema migration 用 PRAGMA user_version 版本号机制
+ *   - 启动时一次性执行所有迁移，之后只检查版本号
  */
 
 const path = require('path');
 const fs = require('fs');
+const fsp = fs.promises;
 const initSqlJs = require('sql.js');
+const { getLogger } = require('./logger');
 
-/** 数据库文件路径 */
+const logger = getLogger('Database');
+
 const DB_PATH = path.join(__dirname, '..', 'monitor.db');
 
 let db = null;
 let SQL = null;
 let saveTimer = null;
+let saving = false;
+let dirty = false;
+let pendingWrites = 0;
 
-/**
- * 初始化数据库（异步）
- * @returns {Promise} 初始化完成
- */
+// 当前 schema 版本号（每次新增迁移 +1）
+const SCHEMA_VERSION = 2;
+
 async function initDatabase() {
   if (db) return;
   SQL = await initSqlJs();
@@ -31,42 +44,67 @@ async function initDatabase() {
   }
 
   initTables();
+  applyMigrations();
   scheduleSave();
 }
 
-/**
- * 获取数据库实例（确保已初始化）
- * @returns {Object} sql.js 数据库实例
- */
 async function getDb() {
   if (!db) await initDatabase();
   return db;
 }
 
 /**
- * 定期自动保存到磁盘（每 5 秒）
+ * 定期自动保存（5 秒），如有写入且非正在保存则触发
  */
 function scheduleSave() {
   if (saveTimer) return;
   saveTimer = setInterval(() => {
-    saveToDisk();
+    if (dirty && !saving) saveToDisk().catch(() => {});
   }, 5000);
 }
 
 /**
- * 将内存数据库写入磁盘
+ * 立即将内存数据库写入磁盘（异步）
+ * @returns {Promise<boolean>}
  */
-function saveToDisk() {
-  if (!db) return;
+async function saveToDisk() {
+  if (!db || saving) return false;
+  saving = true;
   try {
     const data = db.export();
     const buffer = Buffer.from(data);
-    fs.writeFileSync(DB_PATH, buffer);
-  } catch (e) {}
+    // 临时文件 + rename 保证原子性
+    const tmp = DB_PATH + '.tmp';
+    await fsp.writeFile(tmp, buffer);
+    await fsp.rename(tmp, DB_PATH);
+    dirty = false;
+    pendingWrites = 0;
+    return true;
+  } catch (e) {
+    logger.error(`数据库保存失败: ${e.message}`);
+    try {
+      const { getMainWindow } = require('../main/window');
+      const win = getMainWindow();
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('database-error', { message: e.message });
+      }
+    } catch (_) {}
+    return false;
+  } finally {
+    saving = false;
+  }
 }
 
 /**
- * 初始化数据库表结构
+ * 强制立即保存（应用退出前调用）
+ */
+async function flushDatabase() {
+  if (saveTimer) { clearInterval(saveTimer); saveTimer = null; }
+  await saveToDisk();
+}
+
+/**
+ * 初始化基础表（最新结构，迁移只对老库生效）
  */
 function initTables() {
   db.exec(`
@@ -117,54 +155,76 @@ function initTables() {
       error_msg TEXT,
       create_time INTEGER
     );
-  `);
 
-  // 兼容旧表：尝试添加缺失字段
-  const alters = [
-    'ALTER TABLE intent_comments ADD COLUMN video_url TEXT',
-    'ALTER TABLE intent_comments ADD COLUMN score INTEGER DEFAULT 0',
-    'ALTER TABLE intent_comments ADD COLUMN capture_date TEXT'
-  ];
-  for (const sql of alters) {
-    try { db.exec(sql); } catch (e) {}
-  }
+    CREATE INDEX IF NOT EXISTS idx_intent_capture_date ON intent_comments(capture_date);
+    CREATE INDEX IF NOT EXISTS idx_intent_email_sent ON intent_comments(email_sent);
+    CREATE INDEX IF NOT EXISTS idx_intent_aweme_id ON intent_comments(aweme_id);
+    CREATE INDEX IF NOT EXISTS idx_intent_capture_time ON intent_comments(capture_time);
+  `);
 }
 
 /**
- * 执行查询并返回结果数组
- * @param {string} sql - SQL 语句
- * @param {Array} params - 参数
- * @returns {Array<Object>}
+ * schema 迁移
+ *  - 读取 PRAGMA user_version
+ *  - 逐版本执行迁移 SQL
+ *  - 写回新的 user_version
  */
+function applyMigrations() {
+  const currentVersion = queryOne('PRAGMA user_version')?.user_version || 0;
+
+  const migrations = {
+    1: [
+      // v0 -> v1: intent_comments 兼容字段
+      `ALTER TABLE intent_comments ADD COLUMN video_url TEXT`,
+      `ALTER TABLE intent_comments ADD COLUMN score INTEGER DEFAULT 0`,
+      `ALTER TABLE intent_comments ADD COLUMN capture_date TEXT`
+    ],
+    2: [
+      // v1 -> v2: 索引（CREATE INDEX IF NOT EXISTS 已幂等）
+      `CREATE INDEX IF NOT EXISTS idx_intent_capture_date ON intent_comments(capture_date)`,
+      `CREATE INDEX IF NOT EXISTS idx_intent_email_sent ON intent_comments(email_sent)`,
+      `CREATE INDEX IF NOT EXISTS idx_intent_aweme_id ON intent_comments(aweme_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_intent_capture_time ON intent_comments(capture_time)`
+    ]
+  };
+
+  for (let v = currentVersion + 1; v <= SCHEMA_VERSION; v++) {
+    if (!migrations[v]) continue;
+    db.exec('BEGIN');
+    try {
+      for (const sql of migrations[v]) {
+        try { db.exec(sql); }
+        catch (e) { logger.warn(`迁移 v${v} 跳过: ${e.message}`); }
+      }
+      db.exec(`PRAGMA user_version = ${v}`);
+      db.exec('COMMIT');
+      logger.info(`schema 迁移到 v${v}`);
+    } catch (e) {
+      db.exec('ROLLBACK');
+      logger.error(`schema 迁移 v${v} 失败: ${e.message}`);
+      throw e;
+    }
+  }
+}
+
 function queryAll(sql, params = []) {
   const stmt = db.prepare(sql);
   if (params.length > 0) stmt.bind(params);
   const results = [];
-  while (stmt.step()) {
-    results.push(stmt.getAsObject());
-  }
+  while (stmt.step()) results.push(stmt.getAsObject());
   stmt.free();
   return results;
 }
 
-/**
- * 执行查询返回单行
- * @param {string} sql - SQL 语句
- * @param {Array} params - 参数
- * @returns {Object|null}
- */
 function queryOne(sql, params = []) {
   const results = queryAll(sql, params);
   return results.length > 0 ? results[0] : null;
 }
 
-/**
- * 执行写入操作
- * @param {string} sql - SQL 语句
- * @param {Array} params - 参数
- */
 function run(sql, params = []) {
   db.run(sql, params);
+  dirty = true;
+  pendingWrites++;
 }
 
 // ========== 视频表操作 ==========
@@ -178,6 +238,7 @@ function addMonitorVideo(videoInfo) {
     );
     return true;
   } catch (e) {
+    logger.error(`addMonitorVideo 失败: ${e.message}`);
     return false;
   }
 }
@@ -202,6 +263,11 @@ function addIntentComment(commentInfo) {
     const nickname = commentInfo.nickname || '';
     const commentText = commentInfo.text || commentInfo.comment_text || '';
 
+    // 三重去重：comment_id 唯一 / 当日 douyin+nickname+text
+    if (commentInfo.comment_id) {
+      const exists = queryOne('SELECT id FROM intent_comments WHERE comment_id=?', [commentInfo.comment_id]);
+      if (exists) return false;
+    }
     const dup = queryOne(
       'SELECT id FROM intent_comments WHERE douyin_id=? AND nickname=? AND comment_text=? AND capture_date=?',
       [douyinId, nickname, commentText, today]
@@ -236,6 +302,7 @@ function addIntentComment(commentInfo) {
     );
     return true;
   } catch (e) {
+    logger.error(`addIntentComment 失败: ${e.message}`);
     return false;
   }
 }
@@ -267,14 +334,29 @@ function addNotifyLog(commentId, channel, status, errorMsg = '') {
 
 // ========== 统计查询 ==========
 
+/**
+ * 合并为单次查询，5 项指标通过 SUM(CASE WHEN ...) 计算
+ * 性能：5 次 queryOne (O(N)) -> 1 次 queryOne (O(N))
+ */
 function getStats() {
   const today = new Date().toISOString().slice(0, 10);
+  const row = queryOne(`
+    SELECT
+      COUNT(*) AS total_comments,
+      SUM(CASE WHEN capture_date = ? THEN 1 ELSE 0 END) AS today_matches,
+      SUM(CASE WHEN capture_date = ? AND email_sent = 1 THEN 1 ELSE 0 END) AS today_emails,
+      SUM(CASE WHEN email_sent = 1 THEN 1 ELSE 0 END) AS total_emails
+    FROM intent_comments
+  `, [today, today]) || {};
+
+  const videosRow = queryOne('SELECT COUNT(*) AS c FROM monitor_videos') || { c: 0 };
+
   return {
-    total_comments: queryOne('SELECT COUNT(*) as c FROM intent_comments')?.c || 0,
-    today_matches: queryOne('SELECT COUNT(*) as c FROM intent_comments WHERE capture_date=?', [today])?.c || 0,
-    today_emails: queryOne('SELECT COUNT(*) as c FROM intent_comments WHERE email_sent=1 AND capture_date=?', [today])?.c || 0,
-    total_videos: queryOne('SELECT COUNT(*) as c FROM monitor_videos')?.c || 0,
-    total_emails: queryOne('SELECT COUNT(*) as c FROM intent_comments WHERE email_sent=1')?.c || 0
+    total_comments: row.total_comments || 0,
+    today_matches: row.today_matches || 0,
+    today_emails: row.today_emails || 0,
+    total_emails: row.total_emails || 0,
+    total_videos: videosRow.c || 0
   };
 }
 
@@ -282,18 +364,95 @@ function getRecentMatches(limit = 20) {
   return queryAll('SELECT * FROM intent_comments ORDER BY id DESC LIMIT ?', [limit]);
 }
 
+/**
+ * 增量同步拉取，分页避免大表全量加载
+ */
+function getRecentMatchesPage(offset = 0, limit = 50, filter = {}) {
+  const where = [];
+  const params = [];
+  if (filter.date) {
+    where.push('capture_date = ?');
+    params.push(filter.date);
+  }
+  if (filter.keyword) {
+    where.push('(nickname LIKE ? OR comment_text LIKE ? OR video_title LIKE ?)');
+    const k = `%${filter.keyword}%`;
+    params.push(k, k, k);
+  }
+  if (filter.videoAwemeId) {
+    where.push('aweme_id = ?');
+    params.push(filter.videoAwemeId);
+  }
+  const sql = `
+    SELECT * FROM intent_comments
+    ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+    ORDER BY id DESC
+    LIMIT ? OFFSET ?
+  `;
+  return queryAll(sql, [...params, limit, offset]);
+}
+
+function getMatchesCount(filter = {}) {
+  const where = [];
+  const params = [];
+  if (filter.date) {
+    where.push('capture_date = ?');
+    params.push(filter.date);
+  }
+  if (filter.keyword) {
+    where.push('(nickname LIKE ? OR comment_text LIKE ? OR video_title LIKE ?)');
+    const k = `%${filter.keyword}%`;
+    params.push(k, k, k);
+  }
+  if (filter.videoAwemeId) {
+    where.push('aweme_id = ?');
+    params.push(filter.videoAwemeId);
+  }
+  const row = queryOne(
+    `SELECT COUNT(*) AS c FROM intent_comments ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`,
+    params
+  );
+  return row?.c || 0;
+}
+
+/**
+ * 持久化去重：comment_id 唯一 OR (昵称+内容+日期)
+ * @returns {boolean}
+ */
+function isCommentExists(comment) {
+  const today = new Date().toISOString().slice(0, 10);
+  if (comment.comment_id) {
+    const r = queryOne('SELECT id FROM intent_comments WHERE comment_id=? LIMIT 1', [comment.comment_id]);
+    if (r) return true;
+  }
+  const r2 = queryOne(
+    `SELECT id FROM intent_comments WHERE nickname=? AND comment_text=? AND capture_date=? LIMIT 1`,
+    [comment.nickname || '', comment.text || comment.comment_text || '', today]
+  );
+  return !!r2;
+}
+
+function clearIntentComments() {
+  run('DELETE FROM intent_comments');
+}
+
 module.exports = {
   getDb,
   initDatabase,
+  flushDatabase,
   addMonitorVideo,
   getVideoCursor,
   updateVideoCursor,
   addIntentComment,
+  isCommentExists,
   getUnsentEmails,
   markEmailSent,
   addLog,
   addNotifyLog,
   getStats,
   getRecentMatches,
+  getRecentMatchesPage,
+  getMatchesCount,
+  clearIntentComments,
   saveToDisk
 };

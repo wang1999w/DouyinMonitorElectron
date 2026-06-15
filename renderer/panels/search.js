@@ -37,18 +37,20 @@
       appendTaskLog('search', msg);
     });
     window.electronAPI.onSearchResult((result) => addSearchResult(result));
+    // 事件驱动进度（不再依赖日志正则）
+    document.addEventListener('search-progress', (e) => applyProgress(e.detail));
     restoreSchedule();
   }
 
   async function startSearch() {
     const rawKw = document.getElementById('search-keywords').value.trim();
-    if (!rawKw) { alert('请输入搜索关键词'); return; }
+    if (!rawKw) { window.Toast && window.Toast.warn('请输入搜索关键词'); return; }
 
     let keywords = rawKw.split('\n').map(s => s.trim()).filter(Boolean);
     if (document.getElementById('search-add-hash').checked) {
       keywords = keywords.map(k => k.startsWith('#') ? k : '#' + k);
     }
-    if (keywords.length === 0) { alert('请输入有效关键词'); return; }
+    if (keywords.length === 0) { window.Toast && window.Toast.warn('请输入有效关键词'); return; }
 
     let params = { keywords, sortEnabled: false, sortMode: 'default' };
 
@@ -119,36 +121,40 @@
     const el = document.getElementById('search-status');
     if (el) el.textContent = msg;
 
+    // 兜底：日志里仅保留最弱状态变化（不再解析进度数字）
     if (msg.includes('搜索关键词:')) {
       const kw = msg.split('搜索关键词:')[1]?.trim() || '';
       document.getElementById('sp-keyword').textContent = `关键词: ${kw}`;
     }
-    if (msg.includes('发现') && msg.includes('个视频')) {
-      const num = msg.match(/发现 (\d+) 个视频/);
-      if (num) document.getElementById('sp-video').textContent = `视频: 0/${num[1]}`;
-    }
-    if (msg.includes('处理视频')) {
-      const m = msg.match(/\[(\d+)\/(\d+)\]/);
-      if (m) {
-        document.getElementById('sp-video').textContent = `视频: ${m[1]}/${m[2]}`;
-        const pct = Math.round((parseInt(m[1]) / parseInt(m[2])) * 100);
-        document.getElementById('sp-bar').style.width = pct + '%';
-      }
-    }
-    if (msg.includes('命中')) {
-      const m = msg.match(/命中: (\d+)/);
-      if (m) document.getElementById('sp-match').textContent = `命中: ${m[1]}`;
-    }
-    if (msg.includes('CDP:') && msg.includes('条')) {
-      const m = msg.match(/CDP: (\d+)条/);
-      if (m) document.getElementById('sp-comment').textContent = `评论: ${m[1]}`;
-    }
-
     if (msg.includes('完成') || msg.includes('停止') || msg.includes('失败')) {
       setSearchRunning(false);
       document.getElementById('btn-search-pause').textContent = '暂停';
       document.getElementById('sp-status').textContent = msg.includes('完成') ? '已完成' : '已停止';
       document.getElementById('sp-bar').style.width = '100%';
+    }
+  }
+
+  /**
+   * 应用事件驱动的进度
+   * @param {Object} p - { phase, awemeId, cdpCount, domCount, matchCount, videoIndex, videoTotal, matchedTotal, cdpTotal, domTotal }
+   */
+  function applyProgress(p) {
+    if (!p) return;
+    const el = document.getElementById('search-progress');
+    if (el) el.style.display = 'block';
+    if (typeof p.videoIndex === 'number') {
+      document.getElementById('sp-video').textContent = `视频: ${p.videoIndex}/${p.videoTotal || p.videoIndex}`;
+      const total = p.videoTotal && p.videoTotal > 0 ? p.videoTotal : 1;
+      const pct = Math.min(100, Math.round((p.videoIndex / total) * 100));
+      document.getElementById('sp-bar').style.width = pct + '%';
+    }
+    if (typeof p.cdpTotal === 'number' || typeof p.domTotal === 'number') {
+      const cdp = p.cdpTotal || 0;
+      const dom = p.domTotal || 0;
+      document.getElementById('sp-comment').textContent = `评论: ${cdp + dom}`;
+    }
+    if (typeof p.matchedTotal === 'number') {
+      document.getElementById('sp-match').textContent = `命中: ${p.matchedTotal}`;
     }
   }
 
@@ -186,14 +192,28 @@
 
   async function saveSchedule() {
     const cfg = await window.electronAPI.getConfig();
+    const enabled = document.getElementById('search-schedule-enable').checked;
+    const intervalVal = parseInt(document.getElementById('search-schedule-interval').value) || 30;
+    const unitVal = parseInt(document.getElementById('search-schedule-unit').value) || 60;
+    const hoursStr = document.getElementById('search-schedule-hours').value.trim() || '08:00-22:00';
+    const m = hoursStr.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
+    const startHour = m ? Number(m[1]) : 8;
+    const endHour = m ? Number(m[3]) : 22;
+    // intervalMinutes = 字段单位换算:unit=60 是分钟，unit=3600 是小时
+    const intervalMinutes = unitVal === 3600 ? intervalVal * 60 : intervalVal;
     cfg.search_schedule = {
-      enable: document.getElementById('search-schedule-enable').checked,
-      interval: parseInt(document.getElementById('search-schedule-interval').value) || 30,
-      unit: parseInt(document.getElementById('search-schedule-unit').value) || 60,
-      hours: document.getElementById('search-schedule-hours').value.trim()
+      enabled,
+      startHour,
+      endHour,
+      intervalMinutes,
+      // 兼容 UI 回显字段
+      enable: enabled,
+      interval: intervalVal,
+      unit: unitVal,
+      hours: hoursStr
     };
     await window.electronAPI.saveConfig(cfg);
-    alert('定时设置已保存');
+    window.Toast && window.Toast.success('定时设置已保存');
   }
 
   async function restoreSchedule() {

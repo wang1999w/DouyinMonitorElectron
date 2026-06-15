@@ -37,7 +37,7 @@
       receivers: document.getElementById('email-receivers').value.trim()
     };
     await window.electronAPI.saveConfig(cfg);
-    alert('邮件设置已保存');
+    window.Toast && window.Toast.success('邮件设置已保存');
   }
 
   /**
@@ -46,9 +46,9 @@
   async function testEmail() {
     const result = await window.electronAPI.sendTestEmail();
     if (result.success) {
-      alert('测试邮件发送成功');
+      window.Toast && window.Toast.success('测试邮件发送成功');
     } else {
-      alert('发送失败: ' + (result.error || '未知错误'));
+      window.Toast && window.Toast.error('发送失败: ' + (result.error || '未知错误'));
     }
   }
 
@@ -62,7 +62,7 @@
       webhook_url: document.getElementById('wechat-url').value.trim()
     };
     await window.electronAPI.saveConfig(cfg);
-    alert('企微设置已保存');
+    window.Toast && window.Toast.success('企微设置已保存');
   }
 
   /**
@@ -71,9 +71,9 @@
   async function testWechat() {
     const result = await window.electronAPI.sendTestWechat();
     if (result.success) {
-      alert('企微测试消息发送成功');
+      window.Toast && window.Toast.success('企微测试消息发送成功');
     } else {
-      alert('发送失败: ' + (result.error || '未知错误'));
+      window.Toast && window.Toast.error('发送失败: ' + (result.error || '未知错误'));
     }
   }
 
@@ -85,7 +85,7 @@
     cfg.search_intent_keywords = getTextarea('search-intent-kw');
     cfg.search_garbage_keywords = getTextarea('search-garbage-kw');
     await window.electronAPI.saveConfig(cfg);
-    alert('搜索关键词已保存');
+    window.Toast && window.Toast.success('搜索关键词已保存');
   }
 
   /**
@@ -94,9 +94,9 @@
   async function exportResults() {
     const result = await window.electronAPI.exportResults();
     if (result.success) {
-      alert(`导出成功\n${result.path}`);
+      window.Toast && window.Toast.success('导出成功: ' + result.path);
     } else if (result.error) {
-      alert('导出失败: ' + result.error);
+      window.Toast && window.Toast.error('导出失败: ' + result.error);
     }
   }
 

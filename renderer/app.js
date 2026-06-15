@@ -1,151 +1,185 @@
 /**
- * 渲染进程主逻辑
+ * 渲染进程主逻辑（重构版）
+ *
  * 负责：标签页切换、IPC 事件绑定、UI 初始化
+ *
+ * 重构要点：
+ *   - appendLog 不再按关键词过滤（系统消息统一收集）
+ *   - onSearchLog / onMonitorLog 各自只挂一次（解耦：搜索面板只听 search，监控面板只听 monitor）
+ *   - 错误通知通过统一通道，不依赖 alert()
+ *   - 进度通过 'search-progress' / 'monitor-progress' 事件直接更新
+ *   - 启动时一次 setInterval 拉取 stats
  */
 
 document.addEventListener('DOMContentLoaded', () => {
   initTabs();
   initLogListener();
   initStatsListener();
+  initProgressListener();
   initErrorListener();
+  initDatabaseListener();
   loadConfig();
 });
 
-/**
- * 初始化标签页切换
- */
+// ========== 通知组件（内嵌） ==========
+
+const Toast = (() => {
+  function ensureContainer() {
+    let c = document.getElementById('toast-container');
+    if (!c) {
+      c = document.createElement('div');
+      c.id = 'toast-container';
+      c.style.cssText = 'position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+      document.body.appendChild(c);
+    }
+    return c;
+  }
+
+  function show(msg, type = 'info', duration = 4000) {
+    const c = ensureContainer();
+    const el = document.createElement('div');
+    const colors = {
+      info: '#1976d2', success: '#2e7d32', warn: '#ed6c02', error: '#d32f2f'
+    };
+    el.style.cssText = `
+      background:${colors[type] || colors.info};color:#fff;padding:10px 14px;
+      border-radius:6px;font-size:13px;min-width:200px;max-width:420px;
+      box-shadow:0 4px 12px rgba(0,0,0,0.2);pointer-events:auto;
+      transition:opacity .3s;opacity:0;
+    `;
+    el.textContent = msg;
+    c.appendChild(el);
+    requestAnimationFrame(() => { el.style.opacity = '1'; });
+    setTimeout(() => {
+      el.style.opacity = '0';
+      setTimeout(() => el.remove(), 300);
+    }, duration);
+  }
+
+  return {
+    info: (m) => show(m, 'info'),
+    success: (m) => show(m, 'success'),
+    warn: (m) => show(m, 'warn', 6000),
+    error: (m) => show(m, 'error', 8000)
+  };
+})();
+
 function initTabs() {
   const tabBtns = document.querySelectorAll('.tab-btn');
   tabBtns.forEach(btn => {
     btn.addEventListener('click', () => {
       tabBtns.forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-
       btn.classList.add('active');
       const tabId = `tab-${btn.dataset.tab}`;
-      document.getElementById(tabId).classList.add('active');
+      const target = document.getElementById(tabId);
+      if (target) target.classList.add('active');
     });
   });
 }
 
 /**
- * 初始化日志监听
- * 接收主进程发来的日志消息并显示
+ * 统一日志中心
+ * 接受主进程任何分类的日志，全部显示
  */
 function initLogListener() {
-  // 系统日志：显示系统级消息（启动、错误、调度器状态）
-  window.electronAPI.onSearchLog((msg) => {
-    // 只显示系统级消息到主日志面板
-    if (msg.includes('🔔') || msg.includes('调度') || msg.includes('CDP') || msg.includes('异常') || msg.includes('错误') || msg.includes('启动') || msg.includes('停止')) {
-      appendLog(msg);
-    }
-  });
-  window.electronAPI.onMonitorLog((msg) => {
-    if (msg.includes('🔔') || msg.includes('调度') || msg.includes('CDP') || msg.includes('异常') || msg.includes('错误') || msg.includes('启动') || msg.includes('停止')) {
-      appendLog(msg);
-    }
-  });
+  window.electronAPI.onSearchLog((msg) => appendLog(msg, 'search'));
+  window.electronAPI.onMonitorLog((msg) => appendLog(msg, 'monitor'));
+  window.electronAPI.onSchedulerLog && window.electronAPI.onSchedulerLog((msg) => appendLog(msg, 'scheduler'));
 }
 
-/**
- * 初始化错误通知监听
- * 主进程发来的严重错误会在日志面板高亮显示
- */
 function initErrorListener() {
-  window.electronAPI.onErrorNotify((msg) => {
-    appendLog(`[严重错误] ${msg}`);
-    // 在日志面板顶部插入醒目错误提示
-    const logContent = document.getElementById('log-content');
-    if (logContent) {
-      const errDiv = document.createElement('div');
-      errDiv.style.cssText = 'background:#d32f2f;color:#fff;padding:8px 10px;margin-bottom:4px;border-radius:4px;font-size:12px;';
-      errDiv.textContent = `⚠ ${msg}`;
-      logContent.insertBefore(errDiv, logContent.firstChild);
-      // 30 秒后自动移除
-      setTimeout(() => { if (errDiv.parentNode) errDiv.remove(); }, 30000);
-    }
+  window.electronAPI.onErrorNotify && window.electronAPI.onErrorNotify((msg) => {
+    appendLog(`[严重错误] ${msg}`, 'error');
+    Toast.error(msg);
+  });
+}
+
+function initDatabaseListener() {
+  window.electronAPI.onDatabaseError && window.electronAPI.onDatabaseError(({ message }) => {
+    appendLog(`[数据库错误] ${message}`, 'error');
+    Toast.error(`数据库错误: ${message}`);
   });
 }
 
 /**
- * 追加日志到日志面板
- * @param {string} msg - 日志消息
+ * 进度事件（来自 videoProcessor）
  */
-function appendLog(msg) {
+function initProgressListener() {
+  window.electronAPI.onSearchProgress && window.electronAPI.onSearchProgress((p) => {
+    const ev = new CustomEvent('search-progress', { detail: p });
+    document.dispatchEvent(ev);
+  });
+  window.electronAPI.onMonitorProgress && window.electronAPI.onMonitorProgress((p) => {
+    const ev = new CustomEvent('monitor-progress', { detail: p });
+    document.dispatchEvent(ev);
+  });
+}
+
+function appendLog(msg, source = 'system') {
   const logContent = document.getElementById('log-content');
+  if (!logContent) return;
   const entry = document.createElement('div');
-  entry.className = 'log-entry';
+  entry.className = `log-entry log-${source}`;
 
   const time = new Date().toLocaleTimeString();
   entry.textContent = `[${time}] ${msg}`;
 
-  if (msg.includes('异常') || msg.includes('失败') || msg.includes('错误')) {
+  if (msg.includes('异常') || msg.includes('失败') || msg.includes('错误') || msg.includes('❌')) {
     entry.classList.add('log-error');
   } else if (msg.includes('警告') || msg.includes('⚠')) {
     entry.classList.add('log-warn');
+  } else if (msg.includes('命中') || msg.includes('✅') || msg.includes('启动')) {
+    entry.classList.add('log-success');
   }
 
   logContent.appendChild(entry);
   logContent.scrollTop = logContent.scrollHeight;
 
-  // 限制日志条数
-  while (logContent.children.length > 200) {
+  while (logContent.children.length > 300) {
     logContent.removeChild(logContent.firstChild);
   }
 }
 
-/**
- * 初始化统计数据监听
- */
 function initStatsListener() {
-  window.electronAPI.onStatsUpdated((stats) => {
+  window.electronAPI.onStatsUpdated && window.electronAPI.onStatsUpdated((stats) => {
     updateStats(stats);
   });
-
-  // 定期刷新统计
-  setInterval(async () => {
-    try {
-      const stats = await window.electronAPI.getStats();
-      updateStats(stats);
-    } catch (e) {}
+  // 启动时主动拉一次
+  window.electronAPI.getStats().then(updateStats).catch(() => {});
+  // 兜底：每 5 秒拉一次
+  setInterval(() => {
+    window.electronAPI.getStats().then(updateStats).catch(() => {});
   }, 5000);
 }
 
-/**
- * 更新头部统计显示
- * @param {Object} stats - 统计数据
- */
 function updateStats(stats) {
   const todayEl = document.querySelector('#stat-today b');
   const totalEl = document.querySelector('#stat-total b');
+  const emailEl = document.querySelector('#stat-emails b');
+  const videoEl = document.querySelector('#stat-videos b');
   if (todayEl) todayEl.textContent = stats.today_matches || 0;
   if (totalEl) totalEl.textContent = stats.total_comments || 0;
+  if (emailEl) emailEl.textContent = stats.today_emails || 0;
+  if (videoEl) videoEl.textContent = stats.total_videos || 0;
 }
 
-/**
- * 加载配置到 UI
- */
 async function loadConfig() {
   try {
     const cfg = await window.electronAPI.getConfig();
-
-    // 邮件设置
     if (cfg.email) {
-      document.getElementById('email-enable').checked = cfg.email.enable || false;
-      document.getElementById('email-smtp').value = cfg.email.smtp_server || 'smtp.qq.com';
-      document.getElementById('email-port').value = cfg.email.smtp_port || 465;
-      document.getElementById('email-sender').value = cfg.email.sender || '';
-      document.getElementById('email-auth').value = cfg.email.auth_code || '';
-      document.getElementById('email-receivers').value = cfg.email.receivers || '';
+      const e = cfg.email;
+      document.getElementById('email-enable').checked = e.enable || false;
+      document.getElementById('email-smtp').value = e.smtp_server || 'smtp.qq.com';
+      document.getElementById('email-port').value = e.smtp_port || 465;
+      document.getElementById('email-sender').value = e.sender || '';
+      document.getElementById('email-auth').value = e.auth_code || '';
+      document.getElementById('email-receivers').value = e.receivers || '';
     }
-
-    // 企微设置
     if (cfg.wechat) {
       document.getElementById('wechat-enable').checked = cfg.wechat.enable || false;
       document.getElementById('wechat-url').value = cfg.wechat.webhook_url || '';
     }
-
-    // 关键词
     setTextarea('search-intent-kw', cfg.search_intent_keywords || []);
     setTextarea('search-garbage-kw', cfg.search_garbage_keywords || []);
   } catch (e) {
@@ -153,25 +187,15 @@ async function loadConfig() {
   }
 }
 
-/**
- * 设置 textarea 的值（数组转换行分隔字符串）
- * @param {string} id - textarea 元素 ID
- * @param {Array} arr - 关键词数组
- */
 function setTextarea(id, arr) {
   const el = document.getElementById(id);
-  if (el && Array.isArray(arr)) {
-    el.value = arr.join('\n');
-  }
+  if (el && Array.isArray(arr)) el.value = arr.join('\n');
 }
 
-/**
- * 从 textarea 获取关键词数组
- * @param {string} id - textarea 元素 ID
- * @returns {Array} 关键词数组
- */
 function getTextarea(id) {
   const el = document.getElementById(id);
   if (!el) return [];
   return el.value.split('\n').map(s => s.trim()).filter(Boolean);
 }
+
+window.Toast = Toast;
