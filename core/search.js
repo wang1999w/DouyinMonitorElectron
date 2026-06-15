@@ -87,28 +87,40 @@ async function startSearch(params, onLog, onResult) {
         // 时间模式：自然浏览，持续采集直到任务时间到
         let videoIdx = 0;
         const startTime = Date.now();
-        const maxDuration = (params.commentHours || 60) * 60 * 1000; // 用评论时间参数作为任务持续时间
+        const maxDuration = params.taskDuration || 30 * 60 * 1000; // 默认30分钟
 
-        while (searchRunning && !scheduler.shouldAbortSearch() && videoIdx < videos.length) {
-          log(`  [${videoIdx + 1}/${videos.length}] 处理视频 ${videos[videoIdx].aid}`);
-          const matched = await processVideo(view, videos[videoIdx].aid, params, intentKw, garbageKw, cdp, onResult);
-          totalMatched += matched;
-          videoIdx++;
+        while (searchRunning && !scheduler.shouldAbortSearch()) {
+          // 检查任务时间是否到期
+          if (Date.now() - startTime >= maxDuration) {
+            log(`  任务时间已到（${Math.round(maxDuration / 60000)}分钟），停止采集`);
+            break;
+          }
 
-          // 模拟自然浏览间隔
-          await sleep(5000, 15000);
-
-          // 每处理几个视频后滚动加载更多
-          if (videoIdx % 3 === 0 && videoIdx < videos.length) {
+          // 如果当前视频列表处理完了，滚动加载更多
+          if (videoIdx >= videos.length) {
             log('  滚动加载更多视频...');
             await human.mouseScroll(view.webContents, 'down', 2);
             await sleep(2000, 3000);
-            // 重新扫描
             const moreVideos = await scanVideos(view);
+            let added = 0;
             for (const v of moreVideos) {
-              if (!videos.some(x => x.aid === v.aid)) videos.push(v);
+              if (!videos.some(x => x.aid === v.aid)) { videos.push(v); added++; }
             }
+            if (added === 0) {
+              log('  没有更多视频，停止采集');
+              break;
+            }
+            log(`  新增 ${added} 个视频，总计 ${videos.length} 个`);
           }
+
+          log(`  [${videoIdx + 1}] 处理视频 ${videos[videoIdx].aid} (已用时 ${Math.round((Date.now() - startTime) / 60000)}分钟)`);
+          const matched = await processVideo(view, videos[videoIdx].aid, params, intentKw, garbageKw, cdp, onResult);
+          totalMatched += matched;
+          videoIdx++;
+          log(`  进度: 已处理${videoIdx}个视频, 累计命中${totalMatched}条`);
+
+          // 模拟自然浏览间隔
+          await sleep(5000, 15000);
         }
       }
     }

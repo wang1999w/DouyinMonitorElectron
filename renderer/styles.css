@@ -422,3 +422,23 @@ legend {
 }
 
 .btn-sm:hover { background: #f5f5f5; }
+
+/* 模式切换按钮 */
+.mode-btn {
+  flex: 1;
+  padding: 6px 0;
+  border: 1px solid #ddd;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  color: #666;
+  transition: all 0.2s;
+}
+.mode-btn:first-child { border-radius: 4px 0 0 4px; }
+.mode-btn:last-child { border-radius: 0 4px 4px 0; border-left: none; }
+.mode-btn.active {
+  background: #1a73e8;
+  color: #fff;
+  border-color: #1a73e8;
+  font-weight: 600;
+}

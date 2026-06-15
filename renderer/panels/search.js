@@ -1,10 +1,20 @@
 /**
  * 搜索控制面板
- * 排序开关、任务进度、视频标签切换
+ * 数量模式/时间模式切换、排序开关、任务进度
  */
 
 (function () {
   let searchRunning = false;
+  let currentMode = 'quantity'; // 'quantity' 或 'time'
+
+  // 全局模式切换函数（供 HTML onclick 调用）
+  window.switchMode = function(mode) {
+    currentMode = mode;
+    document.getElementById('mode-quantity').classList.toggle('active', mode === 'quantity');
+    document.getElementById('mode-time').classList.toggle('active', mode === 'time');
+    document.getElementById('mode-quantity-panel').style.display = mode === 'quantity' ? '' : 'none';
+    document.getElementById('mode-time-panel').style.display = mode === 'time' ? '' : 'none';
+  };
 
   function initSearch() {
     document.getElementById('btn-search-start').addEventListener('click', startSearch);
@@ -12,7 +22,6 @@
     document.getElementById('btn-search-stop').addEventListener('click', stopSearch);
     document.getElementById('btn-search-schedule').addEventListener('click', saveSchedule);
 
-    // 排序开关：启用/禁用排序选项
     document.getElementById('search-sort-enable').addEventListener('change', (e) => {
       document.getElementById('search-sort-options').style.opacity = e.target.checked ? '1' : '0.4';
       document.querySelectorAll('input[name="search-sort"]').forEach(r => r.disabled = !e.target.checked);
@@ -20,7 +29,6 @@
 
     window.electronAPI.onSearchLog((msg) => updateSearchStatus(msg));
     window.electronAPI.onSearchResult((result) => addSearchResult(result));
-
     restoreSchedule();
   }
 
@@ -34,28 +42,42 @@
     }
     if (keywords.length === 0) { alert('请输入有效关键词'); return; }
 
-    const chVal = parseInt(document.getElementById('search-ch').value) || 60;
-    const chUnit = document.getElementById('search-ch-unit').value;
+    let params = { keywords, sortEnabled: false, sortMode: 'default' };
 
-    // 排序：读取开关状态
-    const sortEnabled = document.getElementById('search-sort-enable').checked;
-    let sortMode = 'default';
-    if (sortEnabled) {
-      sortMode = document.querySelector('input[name="search-sort"]:checked')?.value || 'likes';
+    if (currentMode === 'quantity') {
+      // 数量模式
+      const chVal = parseInt(document.getElementById('search-ch').value) || 60;
+      const chUnit = document.getElementById('search-ch-unit').value;
+      const sortEnabled = document.getElementById('search-sort-enable').checked;
+      params = {
+        ...params,
+        days: parseInt(document.getElementById('search-days').value) || 7,
+        filterDate: true,
+        maxVideos: parseInt(document.getElementById('search-maxv').value) || 10,
+        commentHours: chUnit === '3600' ? chVal * 60 : chVal,
+        maxComments: parseInt(document.getElementById('search-maxc').value) || 200,
+        sortEnabled: sortEnabled,
+        sortMode: sortEnabled ? (document.querySelector('input[name="search-sort"]:checked')?.value || 'likes') : 'default'
+      };
+    } else {
+      // 时间模式
+      const duration = parseInt(document.getElementById('search-duration').value) || 30;
+      const durationUnit = parseInt(document.getElementById('search-duration-unit').value) || 60;
+      const chVal = parseInt(document.getElementById('search-ch-time').value) || 60;
+      const chUnit = parseInt(document.getElementById('search-ch-unit-time').value) || 60;
+      params = {
+        ...params,
+        days: 7,
+        filterDate: false,
+        maxVideos: 9999,
+        commentHours: chUnit === 3600 ? chVal * 60 : chVal,
+        maxComments: 999,
+        taskDuration: duration * durationUnit * 1000,
+        sortEnabled: false,
+        sortMode: 'default'
+      };
     }
 
-    const params = {
-      keywords,
-      days: parseInt(document.getElementById('search-days').value) || 7,
-      filterDate: true,
-      maxVideos: parseInt(document.getElementById('search-maxv').value) || 10,
-      commentHours: chUnit === '3600' ? chVal * 60 : chVal,
-      maxComments: parseInt(document.getElementById('search-maxc').value) || 200,
-      sortMode: sortMode,
-      sortEnabled: sortEnabled
-    };
-
-    // 显示进度面板
     showProgress(true, keywords[0], 0, keywords.length, 0, 0);
     setSearchRunning(true);
     await window.electronAPI.startSearch(params);
@@ -85,7 +107,6 @@
     const el = document.getElementById('search-status');
     if (el) el.textContent = msg;
 
-    // 解析进度信息
     if (msg.includes('搜索关键词:')) {
       const kw = msg.split('搜索关键词:')[1]?.trim() || '';
       document.getElementById('sp-keyword').textContent = `关键词: ${kw}`;
@@ -150,8 +171,6 @@
     container.insertBefore(item, container.firstChild);
     while (container.children.length > 200) container.removeChild(container.lastChild);
   }
-
-  // ========== 定时任务 ==========
 
   async function saveSchedule() {
     const cfg = await window.electronAPI.getConfig();

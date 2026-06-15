@@ -56,37 +56,65 @@
           <div class="ctrl-row">
             <label><input type="checkbox" id="search-add-hash" checked> 自动加 #</label>
           </div>
-          <div class="ctrl-row">
-            <label>视频日期：</label>
-            <select id="search-days">
-              <option value="1">1天内</option>
-              <option value="7" selected>7天内</option>
-              <option value="30">30天内</option>
-            </select>
-            <label>每词采集：</label>
-            <input type="number" id="search-maxv" value="10" min="1" max="100" style="width:50px">
-            <label>个视频</label>
-          </div>
-          <div class="ctrl-row">
-            <label>评论时间：</label>
-            <input type="number" id="search-ch" value="60" min="1" style="width:50px">
-            <select id="search-ch-unit">
-              <option value="60">分钟内</option>
-              <option value="3600">小时内</option>
-            </select>
-            <label>最大评论：</label>
-            <input type="number" id="search-maxc" value="200" min="1" style="width:50px">
+          <!-- 执行模式切换 -->
+          <div style="display:flex;gap:0;margin-bottom:8px;">
+            <button id="mode-quantity" class="mode-btn active" onclick="switchMode('quantity')">数量模式</button>
+            <button id="mode-time" class="mode-btn" onclick="switchMode('time')">时间模式</button>
           </div>
 
-          <!-- 排序开关 -->
-          <div class="ctrl-row" style="background:#f8f8f8;padding:6px 8px;border-radius:4px;">
-            <label><input type="checkbox" id="search-sort-enable" checked> 启用排序筛选</label>
+          <!-- 数量模式设置 -->
+          <div id="mode-quantity-panel">
+            <div class="ctrl-row">
+              <label>视频日期：</label>
+              <select id="search-days">
+                <option value="1">1天内</option>
+                <option value="7" selected>7天内</option>
+                <option value="30">30天内</option>
+              </select>
+              <label>每词采集：</label>
+              <input type="number" id="search-maxv" value="10" min="1" max="100" style="width:50px">
+              <label>个视频</label>
+            </div>
+            <div class="ctrl-row">
+              <label>评论时间：</label>
+              <input type="number" id="search-ch" value="60" min="1" style="width:50px">
+              <select id="search-ch-unit">
+                <option value="60">分钟内</option>
+                <option value="3600">小时内</option>
+              </select>
+              <label>最大评论：</label>
+              <input type="number" id="search-maxc" value="200" min="1" style="width:50px">
+            </div>
+            <!-- 排序筛选 -->
+            <div class="ctrl-row" style="background:#f8f8f8;padding:6px 8px;border-radius:4px;">
+              <label><input type="checkbox" id="search-sort-enable" checked> 启用排序筛选</label>
+            </div>
+            <div id="search-sort-options" class="ctrl-row" style="padding:4px 8px;">
+              <label>排序：</label>
+              <label><input type="radio" name="search-sort" value="likes" checked> 最多点赞</label>
+              <label><input type="radio" name="search-sort" value="newest"> 最新发布</label>
+            </div>
           </div>
-          <div id="search-sort-options" class="ctrl-row" style="padding:4px 8px;">
-            <label>排序方式：</label>
-            <label><input type="radio" name="search-sort" value="likes" checked> 最多点赞</label>
-            <label><input type="radio" name="search-sort" value="newest"> 最新发布</label>
-            <label><input type="radio" name="search-sort" value="default"> 综合</label>
+
+          <!-- 时间模式设置 -->
+          <div id="mode-time-panel" style="display:none;">
+            <div class="ctrl-row">
+              <label>任务持续：</label>
+              <input type="number" id="search-duration" value="30" min="1" max="1440" style="width:50px">
+              <select id="search-duration-unit">
+                <option value="60">分钟</option>
+                <option value="3600">小时</option>
+              </select>
+            </div>
+            <div class="ctrl-row">
+              <label>评论时间：</label>
+              <input type="number" id="search-ch-time" value="60" min="1" style="width:50px">
+              <select id="search-ch-unit-time">
+                <option value="60">分钟内</option>
+                <option value="3600">小时内</option>
+              </select>
+            </div>
+            <div style="font-size:10px;color:#999;padding:4px 8px;">自然浏览模式，不排序，持续滚动加载采集</div>
           </div>
 
           <div class="ctrl-row">
