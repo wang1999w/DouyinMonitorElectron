@@ -217,8 +217,26 @@ async function doSearch(view, keyword) {
   await sleep(500, 800);
   log(`  ✓ 输入: ${keyword}`);
 
-  // Enter 搜索
-  await human.keyPress(wc, 'Enter');
+  // 关闭下拉菜单（点击页面空白区域）
+  await human.mouseClick(wc, rand(400, 600), rand(300, 500));
+  await sleep(500, 800);
+
+  // 直接点击搜索按钮（不用 Enter，避免被下拉拦截）
+  const btnPos = await js(wc, `(function(){
+    const btn = document.querySelector('[data-e2e="searchbar-button"]');
+    if (btn) {
+      const r = btn.getBoundingClientRect();
+      return { x: r.x + r.width/2, y: r.y + r.height/2 };
+    }
+    return null;
+  })()`);
+  if (btnPos) {
+    await human.mouseClick(wc, btnPos.x, btnPos.y);
+    log(`  ✓ 点击搜索按钮 (${btnPos.x},${btnPos.y})`);
+  } else {
+    log('  搜索按钮未找到，尝试 Enter');
+    await human.keyPress(wc, 'Enter');
+  }
   await sleep(6000, 8000);
 
   // 验证
