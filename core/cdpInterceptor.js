@@ -30,12 +30,14 @@ const logger = getLogger('CDPInterceptor');
 
 const COMMENT_API_PATTERNS = [
   '/comment/list',
-  '/comment/list_reply'
+  '/comment/list_reply',
+  '/comment/publish'
 ];
 
 const VIDEO_API_PATTERNS = [
   '/aweme/v1/web/aweme/detail',
-  '/aweme/post'
+  '/aweme/post',
+  '/aweme/v1/web/tab/feed'
 ];
 
 const SEARCH_API_PATTERNS = [
@@ -63,6 +65,10 @@ class CDPInterceptor {
     /** 回调 */
     this.onComment = null;
     this.onVideo = null;
+    /** Feed 缓存（首页推荐视频） */
+    this.feedCache = new Map();
+    /** 最近一次评论发布结果 */
+    this.lastPublishResult = null;
     /** debugger 句柄 */
     this._webContents = null;
     this._messageHandler = null;
@@ -182,6 +188,19 @@ class CDPInterceptor {
       aid = u.searchParams.get('aweme_id') || '';
     } catch (e) {}
 
+    // 评论发布 API
+    if (url.includes('/comment/publish')) {
+      const statusCode = data.status_code || data.status;
+      if (statusCode === 0) {
+        logger.info('评论发布成功');
+        this.lastPublishResult = { success: true, timestamp: Date.now() };
+      } else {
+        logger.warn(`评论发布失败: status_code=${statusCode}`);
+        this.lastPublishResult = { success: false, statusCode, timestamp: Date.now() };
+      }
+      return;
+    }
+
     let commentsData = [];
     if (data.comments) {
       commentsData = data.comments;
@@ -254,23 +273,38 @@ class CDPInterceptor {
 
   _parseVideoResponse(data) {
     try {
+      // 视频详情 API
       const aweme = data.aweme_detail || (data.data && data.data.aweme_detail);
-      if (!aweme || !aweme.aweme_id) return;
+      if (aweme && aweme.aweme_id) {
+        if (this.collectTarget && this.collectTarget !== aweme.aweme_id) return;
+        this.currentVideo = {
+          aweme_id: aweme.aweme_id,
+          desc: aweme.desc || '',
+          author: aweme.author?.nickname || '',
+          author_uid: aweme.author?.uid || '',
+          author_sec_uid: aweme.author?.sec_uid || '',
+          create_time: aweme.create_time || 0,
+          video_url: `https://www.douyin.com/video/${aweme.aweme_id}`
+        };
+        if (this.onVideo) this.onVideo(this.currentVideo);
+      }
 
-      // 只有在采集目标视频时才覆盖 currentVideo，避免跨视频污染
-      if (this.collectTarget && this.collectTarget !== aweme.aweme_id) return;
-
-      this.currentVideo = {
-        aweme_id: aweme.aweme_id,
-        desc: aweme.desc || '',
-        author: aweme.author?.nickname || '',
-        author_uid: aweme.author?.uid || '',
-        author_sec_uid: aweme.author?.sec_uid || '',
-        create_time: aweme.create_time || 0,
-        video_url: `https://www.douyin.com/video/${aweme.aweme_id}`
-      };
-
-      if (this.onVideo) this.onVideo(this.currentVideo);
+      // Feed 列表 API（首页推荐）
+      const feedList = data.aweme_list || [];
+      if (Array.isArray(feedList) && feedList.length > 0) {
+        for (const item of feedList) {
+          if (item.aweme_id) {
+            this.feedCache.set(item.aweme_id, {
+              aweme_id: item.aweme_id,
+              desc: item.desc || '',
+              author: item.author?.nickname || '',
+              create_time: item.create_time || 0,
+              share_url: item.share_url || ''
+            });
+          }
+        }
+        logger.info(`Feed 缓存更新，共 ${this.feedCache.size} 个视频`);
+      }
     } catch (e) {}
   }
 
@@ -304,6 +338,29 @@ class CDPInterceptor {
     const videos = [...this.searchVideos];
     this.searchVideos = [];
     return videos;
+  }
+
+  /**
+   * 获取 Feed 缓存中的视频
+   */
+  getFeedVideo(aid) {
+    return this.feedCache.get(aid) || null;
+  }
+
+  /**
+   * 等待评论发布结果
+   */
+  async waitForPublishResult(timeout = 8000) {
+    const start = Date.now();
+    while (Date.now() - start < timeout) {
+      if (this.lastPublishResult && (Date.now() - this.lastPublishResult.timestamp) < 2000) {
+        const result = this.lastPublishResult;
+        this.lastPublishResult = null;
+        return result;
+      }
+      await new Promise(r => setTimeout(r, 200));
+    }
+    return { success: false, reason: 'timeout' };
   }
 
   clearComments(awemeId) {
