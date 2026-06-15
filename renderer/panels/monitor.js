@@ -101,6 +101,23 @@
 
         <div style="display:flex;gap:12px;margin-bottom:10px;">
           <div style="flex:1;">
+            <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">评论时效 <span style="color:#999;">（只采集这个时间内的评论）</span></label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input type="number" id="bm-comment-hours" value="60" min="1" max="1440" style="width:60px;padding:5px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+              <span style="font-size:12px;color:#666;">分钟内</span>
+            </div>
+          </div>
+          <div style="flex:1;">
+            <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">作品日期筛选</label>
+            <select id="bm-days" style="padding:5px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+              <option value="1">1天内</option>
+              <option value="7" selected>7天内</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:12px;margin-bottom:10px;">
+          <div style="flex:1;">
             <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">意向关键词 <span style="color:#999;">（每行一个）</span></label>
             <textarea id="bm-intent-kw" rows="4" placeholder="咨询\n多少钱\n价格\n想了解" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;box-sizing:border-box;resize:vertical;"></textarea>
           </div>
@@ -137,6 +154,7 @@
       const intentStr = document.getElementById('bm-intent-kw').value.trim();
       const garbageStr = document.getElementById('bm-garbage-kw').value.trim();
       const days = parseInt(document.getElementById('bm-days').value) || 7;
+      const commentHours = parseInt(document.getElementById('bm-comment-hours').value) || 60;
 
       if (!secUid) { alert('请填写博主 sec_uid'); return; }
       if (!timesStr) { alert('请至少填写一个触发时间点'); return; }
@@ -147,6 +165,7 @@
         trigger_times: timesStr.split('\n').map(s => s.trim()).filter(Boolean),
         intent_keywords: intentStr ? intentStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
         garbage_keywords: garbageStr ? garbageStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
+        comment_hours: commentHours,
         date_value: days,
         status: 1
       };

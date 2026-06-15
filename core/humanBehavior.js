@@ -73,14 +73,15 @@ async function keyPress(wc, key, modifiers) {
 }
 
 /**
- * 文字输入 — 使用 webContents.insertText()
- * 比 sendInputEvent({ type: 'char' }) 更可靠
+ * 文字输入 — 模拟键盘逐字输入
+ * keyDown → char → keyUp，完全模拟真人打字
  */
 async function typeText(wc, text) {
-  try {
-    await wc.insertText(text);
-  } catch (e) {
-    logger.warn(`insertText 失败: ${e.message}`);
+  for (const ch of text) {
+    await safeSend(wc, { type: 'keyDown', key: ch, keyCode: 0 });
+    await safeSend(wc, { type: 'char', char: ch });
+    await safeSend(wc, { type: 'keyUp', key: ch, keyCode: 0 });
+    await sleep(rand(50, 150));
   }
 }
 

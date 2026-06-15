@@ -73,7 +73,7 @@ async function executeSingleBlogger(blogger, cfg, onLog) {
     const videos = await scanBloggerVideos(view);
     log(`  发现 ${videos.length} 个视频`);
 
-    const cutoffTs = Math.floor(Date.now() / 1000) - 24 * 3600;
+    const cutoffTs = Math.floor(Date.now() / 1000) - (blogger.comment_hours || 60) * 60;
 
     for (const video of videos) {
       if (!monitorRunning) break;
@@ -83,23 +83,48 @@ async function executeSingleBlogger(blogger, cfg, onLog) {
       // 模拟点击视频
       const clicked = await clickVideoById(view, video.aid);
       if (!clicked) { log('    未定位到视频，跳过'); continue; }
-      await sleep(3000, 5000);
+      await sleep(5000, 8000);
 
-      // 4. 模拟观看
+      // 模拟观看
       await human.mouseMove(wc, rand(300, 700), rand(200, 400));
       await sleep(3000, 6000);
 
+      // 检查评论数：抢首评=无评论，跳过
+      const commentCount = await wc.executeJavaScript(`
+        (function(){
+          const body = document.body.innerText;
+          if (body.includes('抢首评')) return 0;
+          for (const el of document.querySelectorAll('*')) {
+            const t = (el.innerText || '').trim();
+            if (t.match(/^\\d+$/) && el.nextElementSibling && (el.nextElementSibling.innerText||'').includes('评')) {
+              return parseInt(t);
+            }
+          }
+          return -1;
+        })()
+      `).catch(() => -1);
+
+      if (commentCount === 0) {
+        log('    无评论，跳过');
+        await human.keyPress(wc, 'Escape');
+        await sleep(1000, 2000);
+        continue;
+      }
+      log(`    评论数: ${commentCount === -1 ? '未知' : commentCount}`);
+
       // 打开评论区
       await human.keyPress(wc, 'x');
-      await sleep(3000, 4000);
+      await sleep(4000, 6000);
 
       // 5. 滚动加载评论
-      for (let scroll = 0; scroll < 20; scroll++) {
+      for (let scroll = 0; scroll < 15; scroll++) {
         if (!monitorRunning) break;
-        await human.mouseScroll(wc, 'down', 1);
-        if (Math.random() < 0.3) {
-          await human.mouseMove(wc, rand(600, 900), rand(300, 600));
-        }
+        await wc.executeJavaScript(`
+          (function(){
+            const panel = document.querySelector('[data-e2e="comment-list"], [class*="comment-list"]');
+            if (panel) panel.scrollBy(0, 150);
+          })()
+        `).catch(() => {});
         await sleep(1000, 2000);
       }
 
@@ -107,7 +132,14 @@ async function executeSingleBlogger(blogger, cfg, onLog) {
       const cdpComments = cdp ? cdp.getComments(video.aid) : [];
       const domComments = await readDomComments(view);
       const domOnly = domComments.filter(d => !cdpComments.some(c => c.text === d.text));
-      const allComments = [...cdpComments, ...domOnly];
+      let allComments = [...cdpComments, ...domOnly];
+
+      // 时效过滤
+      if (cutoffTs > 0) {
+        const before = allComments.length;
+        allComments = allComments.filter(c => (c.create_time || 0) >= cutoffTs);
+        if (before > allComments.length) log(`    时效过滤: 排除${before - allComments.length}条`);
+      }
 
       // 获取视频信息
       const videoInfo = {

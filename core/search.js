@@ -99,6 +99,12 @@ async function startSearch(params, onLog, onResult) {
     const cfg = require('./config').loadConfig();
     const intentKw = cfg.search_intent_keywords || [];
     const garbageKw = cfg.search_garbage_keywords || [];
+
+    // 评论时效：只采集这个时间范围内的评论
+    const commentHours = params.commentHours || 60; // 默认60分钟
+    const cutoffTs = Math.floor(Date.now() / 1000) - commentHours * 60;
+    log(`  评论时效: ${commentHours}分钟内 (${new Date(cutoffTs * 1000).toLocaleString('zh-CN')})`);
+
     let totalMatched = 0;
 
     for (let kwIdx = 0; kwIdx < keywords.length; kwIdx++) {
@@ -158,6 +164,10 @@ async function startSearch(params, onLog, onResult) {
           continue;
         }
 
+        // 模拟浏览行为：随机移动鼠标、悬停视频卡片预览
+        log(`  浏览 ${videos.length} 个视频...`);
+        await simulateBrowseVideos(view, videos);
+
         // 过滤已处理的ID
         const unprocessed = videos.filter(v => !processedIds.has(v.aid));
         if (unprocessed.length === 0) {
@@ -178,7 +188,7 @@ async function startSearch(params, onLog, onResult) {
         processedCount++;
         log(`  [${processedCount}] 处理视频 ${video.aid}`);
 
-        const matched = await processVideo(view, video.aid, params, intentKw, garbageKw, cdp, onResult);
+        const matched = await processVideo(view, video.aid, params, intentKw, garbageKw, cdp, onResult, cutoffTs);
         totalMatched += matched;
 
         // 处理间隔
@@ -292,9 +302,51 @@ async function clickFilterOption(wc, text) {
   } catch (e) {}
 }
 
+// ========== 模拟浏览视频列表 ==========
+
+async function simulateBrowseVideos(view, videos) {
+  const wc = view.webContents;
+  const browseCount = Math.min(rand(2, 4), videos.length);
+  const indices = [];
+  while (indices.length < browseCount) {
+    const idx = rand(0, videos.length - 1);
+    if (!indices.includes(idx)) indices.push(idx);
+  }
+
+  for (const idx of indices) {
+    if (!checkRunning()) break;
+    const aid = videos[idx].aid;
+
+    // 找到视频卡片位置
+    const cardPos = await wc.executeJavaScript(`(function(){
+      const links = document.querySelectorAll('a[href*="/video/${aid}"]');
+      for (const a of links) {
+        const card = a.closest('[class*="card"]') || a;
+        const r = card.getBoundingClientRect();
+        if (r.width > 50 && r.height > 50)
+          return { x: r.x + r.width/2, y: r.y + r.height/2, w: r.width, h: r.height };
+      }
+      return null;
+    })()`).catch(() => null);
+
+    if (!cardPos) continue;
+
+    // 鼠标移动到卡片位置（触发预览播放）
+    await human.mouseMove(wc, cardPos.x, cardPos.y);
+    await sleep(rand(1500, 3000));
+
+    // 在卡片上随机小幅移动（模拟浏览）
+    await human.mouseMove(wc, cardPos.x + rand(-30, 30), cardPos.y + rand(-20, 20));
+    await sleep(rand(500, 1500));
+  }
+
+  // 随机暂停模拟阅读
+  await sleep(rand(1000, 3000));
+}
+
 // ========== 视频处理 ==========
 
-async function processVideo(view, aid, params, intentKw, garbageKw, cdp, onResult) {
+async function processVideo(view, aid, params, intentKw, garbageKw, cdp, onResult, cutoffTs) {
   if (!checkRunning()) return 0;
   const wc = view.webContents;
 
@@ -303,6 +355,141 @@ async function processVideo(view, aid, params, intentKw, garbageKw, cdp, onResul
   if (await checkCaptcha(wc)) {
     if (!(await waitForCaptchaSolved(wc))) return 0;
   }
+
+  try {
+    // 点击视频
+    const pos = await wc.executeJavaScript(`(function(){
+      const links = document.querySelectorAll('a[href*="/video/${aid}"]');
+      for (const a of links) {
+        a.scrollIntoView({ block:'center' });
+        const r = a.getBoundingClientRect();
+        if (r.width>50 && r.height>50) return { x:r.x+r.width/2, y:r.y+r.height/2 };
+      }
+      return null;
+    })()`).catch(() => null);
+    if (!pos) { log('    视频未找到'); return 0; }
+
+    await sleep(500, 1000);
+    await human.mouseClick(wc, pos.x, pos.y);
+
+    // 等待视频加载
+    log('    等待视频加载...');
+    await sleep(5000, 8000);
+    if (!checkRunning()) return 0;
+
+    // 模拟观看
+    await human.mouseMove(wc, rand(300, 700), rand(200, 400));
+    await sleep(3000, 5000);
+
+    // 先检查评论数：抢首评 = 无评论，数字 = 有评论
+    const commentCount = await wc.executeJavaScript(`
+      (function(){
+        // 查找评论按钮/评论数显示
+        // 抖音评论区通常显示 "抢首评" 或 "XX条"
+        const body = document.body.innerText;
+        if (body.includes('抢首评')) return 0;
+        // 查找评论数：如 "1259条评论" 或评论图标旁边的数字
+        const commentBtn = document.querySelector('[data-e2e="comment-icon"], [class*="comment-count"], [class*="CommentCount"]');
+        if (commentBtn) {
+          const text = commentBtn.innerText || '';
+          const m = text.match(/(\\d+)/);
+          if (m) return parseInt(m[1]);
+        }
+        // 备选：查找包含"评"字的元素
+        for (const el of document.querySelectorAll('*')) {
+          const t = (el.innerText || '').trim();
+          if (t.match(/^\\d+$/) && el.nextElementSibling && (el.nextElementSibling.innerText||'').includes('评')) {
+            return parseInt(t);
+          }
+        }
+        return -1; // 未知
+      })()
+    `).catch(() => -1);
+
+    if (commentCount === 0) {
+      log('    无评论（抢首评），跳过');
+      await human.keyPress(wc, 'Escape');
+      await sleep(1000, 2000);
+      return 0;
+    }
+    log(`    评论数: ${commentCount === -1 ? '未知' : commentCount}`);
+
+    // 打开评论
+    await human.keyPress(wc, 'x');
+    await sleep(4000, 6000);
+
+    // 等待评论区出现
+    const hasComment = await wc.executeJavaScript(`
+      !!document.querySelector('[data-e2e="comment-list"], [class*="comment-list"], [class*="CommentList"]')
+    `).catch(() => false);
+
+    if (!hasComment) {
+      log('    评论区未出现，再按x');
+      await human.keyPress(wc, 'x');
+      await sleep(3000, 5000);
+    }
+
+    if (!checkRunning()) return 0;
+
+    // 在评论区内滚动加载
+    log('    滚动加载评论...');
+    for (let s = 0; s < 12; s++) {
+      if (!checkRunning()) break;
+      await wc.executeJavaScript(`
+        (function(){
+          const panel = document.querySelector('[data-e2e="comment-list"], [class*="comment-list"], [class*="CommentList"]');
+          if (panel) panel.scrollBy(0, 150);
+          else {
+            const comment = document.querySelector('[class*="comment"]');
+            if (comment) {
+              const p = comment.closest('[style*="overflow"]') || comment.parentElement;
+              if (p) p.scrollBy(0, 150);
+            }
+          }
+        })()
+      `).catch(() => {});
+      await sleep(1000, 2000);
+    }
+
+    // 采集完整数据
+    const videoInfo = { aweme_id: aid, desc: '', author: '', video_url: `https://www.douyin.com/video/${aid}` };
+    const cdpComments = cdp ? cdp.getComments(aid) : [];
+    const domComments = await readDomComments(view);
+    const domOnly = domComments.filter(d => !cdpComments.some(c => c.text === d.text));
+    let allComments = [...cdpComments, ...domOnly];
+
+    // 时效过滤：只保留 cutoffTs 之后的评论
+    if (cutoffTs > 0) {
+      const before = allComments.length;
+      allComments = allComments.filter(c => (c.create_time || 0) >= cutoffTs);
+      const filtered = before - allComments.length;
+      if (filtered > 0) log(`    时效过滤: 排除${filtered}条超时评论`);
+    }
+
+    if (cdp?.currentVideo?.aweme_id === aid) {
+      videoInfo.desc = cdp.currentVideo.desc || '';
+      videoInfo.author = cdp.currentVideo.author || '';
+    }
+
+    // 逐条匹配处理
+    let matched = 0;
+    for (const c of allComments) {
+      if (!checkRunning()) break;
+      const result = pipeline.processComment(c, null, videoInfo, { intent: intentKw, garbage: garbageKw });
+      if (result) { matched++; if (onResult) onResult(result); }
+    }
+
+    log(`    CDP:${cdpComments.length} DOM:${domComments.length} 有效:${allComments.length} 命中:${matched}`);
+
+    await human.keyPress(wc, 'Escape');
+    await sleep(2000, 3000);
+    return matched;
+  } catch (e) {
+    log(`    异常: ${e.message}`);
+    try { await human.keyPress(wc, 'Escape'); } catch (e2) {}
+    return 0;
+  }
+}
 
   try {
     // 点击视频
