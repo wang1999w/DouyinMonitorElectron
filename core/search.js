@@ -149,7 +149,8 @@ async function startSearch(params, onLog, onResult) {
 
 /**
  * 模拟搜索操作（参照原Python版本）
- * 点击搜索框 → 清空 → 逐字输入 → 点击搜索按钮
+ * 点击搜索框 → 检查内容长度 → 逐个Backspace清空 → 逐字输入 → 点击搜索
+ * 绝不使用 Ctrl+A，避免全选页面内容
  */
 async function typeKeywordAndSearch(view, keyword) {
   const wc = view.webContents;
@@ -160,7 +161,7 @@ async function typeKeywordAndSearch(view, keyword) {
       const el = document.querySelector('[data-e2e="searchbar-input"], input[placeholder*="搜索"]');
       if (!el) return null;
       const r = el.getBoundingClientRect();
-      return { x: r.x + r.width/2, y: r.y + r.height/2, w: r.width, h: r.height };
+      return { x: r.x + r.width/2, y: r.y + r.height/2, value: el.value || '', w: r.width };
     })()
   `).catch(() => null);
 
@@ -173,11 +174,17 @@ async function typeKeywordAndSearch(view, keyword) {
   await human.mouseClick(wc, searchInput.x, searchInput.y);
   await sleep(300, 500);
 
-  // 全选 → 清空
-  await human.keyPress(wc, 'a', ['ctrl']);
-  await sleep(100, 200);
-  await human.keyPress(wc, 'Backspace');
-  await sleep(200, 400);
+  // 检查搜索框是否有内容，有则逐个Backspace删除（不用Ctrl+A）
+  const contentLen = (searchInput.value || '').length;
+  if (contentLen > 0) {
+    log(`    清空搜索框 (${contentLen}个字符)...`);
+    for (let i = 0; i < contentLen; i++) {
+      if (!checkRunning()) return false;
+      await human.keyPress(wc, 'Backspace');
+      await sleep(30, 80);
+    }
+    await sleep(200, 400);
+  }
 
   // 逐字输入关键词
   for (const ch of keyword) {
@@ -201,7 +208,6 @@ async function typeKeywordAndSearch(view, keyword) {
     await human.mouseClick(wc, searchBtn.x, searchBtn.y);
     log('    已点击搜索按钮');
   } else {
-    // 替代：按回车
     log('    未找到搜索按钮，按回车');
     await human.keyPress(wc, 'Enter');
   }
