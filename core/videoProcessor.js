@@ -151,8 +151,17 @@ async function closeAndEscape(wc) {
 async function wait(ms) {
   const step = 500;
   for (let t = 0; t < ms; t += step) {
-    const { isRunning } = require('./search');
-    if (!isRunning()) return false;
+    const search = require('./search');
+    if (!search.isRunning()) return false;
+    // 检查暂停状态
+    if (search.isPaused && search.isPaused()) {
+      _log('     ⏸ 已暂停');
+      while (search.isPaused && search.isPaused() && search.isRunning()) {
+        await sleep(500);
+      }
+      if (!search.isRunning()) return false;
+      _log('     ▶ 已恢复');
+    }
     await sleep(step);
   }
   return true;

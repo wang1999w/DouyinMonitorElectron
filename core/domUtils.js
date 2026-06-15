@@ -215,6 +215,35 @@ async function waitForVideoLoad(view, timeout = 10000) {
 // ========== 评论区相关 ==========
 
 /**
+ * 从搜索结果列表检查视频评论数（不点击进入）
+ * 在列表中可以看到评论数或"抢首评"
+ * @returns {number} 评论数，0=无评论/抢首评，-1=未知
+ */
+async function getVideoCommentCountFromList(view, aid) {
+  return await execJS(view.webContents, `(function(){
+    // 找到包含该视频ID的卡片
+    const links = document.querySelectorAll('a[href*="/video/${aid}"]');
+    for (const a of links) {
+      const card = a.closest('[class*="card"], [class*="item"], [class*="video"]') || a;
+      const text = card.innerText || '';
+      // 检查"抢首评"
+      if (text.includes('抢首评')) return 0;
+      // 检查评论数数字（通常在卡片底部）
+      const nums = text.match(/(\\d+)(?:条|个)/);
+      if (nums) return parseInt(nums[1]);
+      // 检查单独的数字
+      const el = card.querySelector('[class*="comment"], [class*="Comment"]');
+      if (el) {
+        const t = (el.innerText||'').trim();
+        if (t.match(/^\\d+$/)) return parseInt(t);
+        if (t.includes('抢首评')) return 0;
+      }
+    }
+    return -1; // 未知
+  })()`) ?? -1;
+}
+
+/**
  * 检查评论区是否打开（laizan 方式：#videoSideCard + clientWidth）
  */
 async function isCommentOpen(view) {
@@ -367,6 +396,7 @@ module.exports = {
   execJS, sleep, waitForElement,
   findSearchInput, findSearchButton, setSearchInputValue, verifySearchInput,
   clickVideoById, getCurrentVideoInfo, isVideoLoaded, waitForVideoLoad,
+  getVideoCommentCountFromList,
   isCommentOpen, getCommentCount, readDomComments, scrollCommentPanel,
   hasCaptcha,
   clickByText, scanVideoLinks

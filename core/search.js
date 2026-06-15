@@ -39,6 +39,7 @@ function pauseSearch() {
 }
 
 function isRunning() { return searchRunning; }
+function isPaused() { return searchPaused; }
 
 // ========== 可中断等待 ==========
 
@@ -90,6 +91,24 @@ async function startSearch(params, onLog, onResult) {
       return;
     }
     log('✅ 已登录');
+
+    // ===== 检查当前页面状态 =====
+    log('🔍 检查页面状态...');
+    const currentUrl = await js(wc, 'location.href') || '';
+    const isSearchPage = currentUrl.includes('search');
+    const isDouyin = currentUrl.includes('douyin.com');
+
+    if (!isDouyin) {
+      log('  不在抖音页面，导航到首页...');
+      await wc.loadURL('https://www.douyin.com');
+      await wait(5000, 7000);
+    } else if (isSearchPage) {
+      log('  当前在搜索结果页，先回首页...');
+      await wc.loadURL('https://www.douyin.com');
+      await wait(5000, 7000);
+    } else {
+      log('  ✓ 在首页');
+    }
 
     // ===== 检查验证码 =====
     if (await dom.hasCaptcha(view)) {
@@ -160,6 +179,18 @@ async function startSearch(params, onLog, onResult) {
         const v = unprocessed[0];
         count++;
         log(`\n━━━ [${count}/${target}] 视频 ${v.aid} ━━━`);
+
+        // 先从列表检查评论数（不点击进入）
+        const listCommentCount = await dom.getVideoCommentCountFromList(view, v.aid);
+        if (listCommentCount === 0) {
+          log('  ⏭ 列表显示0评论/抢首评，跳过');
+          task.processedIds.add(v.aid);
+          fails++;
+          continue;
+        }
+        if (listCommentCount > 0) {
+          log(`  📊 列表评论数: ${listCommentCount}`);
+        }
 
         // 处理视频（核心）
         const result = await videoProcessor.processVideo({
@@ -355,4 +386,4 @@ function log(msg) { logger.info(msg); if (logCallback) logCallback(msg); }
 function sleep(a, b) { const ms = b ? rand(a,b) : a; return new Promise(r => setTimeout(r, ms)); }
 function rand(a, b) { return Math.floor(Math.random()*(b-a)+a); }
 
-module.exports = { startSearch, stopSearch, pauseSearch, isRunning };
+module.exports = { startSearch, stopSearch, pauseSearch, isRunning, isPaused };
