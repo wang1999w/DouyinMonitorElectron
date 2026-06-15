@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initTabs();
   initLogListener();
   initStatsListener();
+  initErrorListener();
   loadConfig();
 });
 
@@ -32,10 +33,28 @@ function initTabs() {
  * 接收主进程发来的日志消息并显示
  */
 function initLogListener() {
-  const logContent = document.getElementById('log-content');
-
   window.electronAPI.onSearchLog((msg) => appendLog(msg));
   window.electronAPI.onMonitorLog((msg) => appendLog(msg));
+}
+
+/**
+ * 初始化错误通知监听
+ * 主进程发来的严重错误会在日志面板高亮显示
+ */
+function initErrorListener() {
+  window.electronAPI.onErrorNotify((msg) => {
+    appendLog(`[严重错误] ${msg}`);
+    // 在日志面板顶部插入醒目错误提示
+    const logContent = document.getElementById('log-content');
+    if (logContent) {
+      const errDiv = document.createElement('div');
+      errDiv.style.cssText = 'background:#d32f2f;color:#fff;padding:8px 10px;margin-bottom:4px;border-radius:4px;font-size:12px;';
+      errDiv.textContent = `⚠ ${msg}`;
+      logContent.insertBefore(errDiv, logContent.firstChild);
+      // 30 秒后自动移除
+      setTimeout(() => { if (errDiv.parentNode) errDiv.remove(); }, 30000);
+    }
+  });
 }
 
 /**

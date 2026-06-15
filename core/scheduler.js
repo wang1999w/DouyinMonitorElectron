@@ -51,8 +51,6 @@ async function tick() {
         if (tt === currentTime) {
           lastTriggerMinute = currentMinute;
           log(`触发监控任务: ${blogger.nickname} (时间点 ${tt})`);
-          const config = require('./config');
-          const cfg = config.loadConfig();
           await executeMonitorWithPriority(blogger, cfg);
           return;
         }
@@ -60,15 +58,20 @@ async function tick() {
     }
   } catch (e) {
     log(`调度异常: ${e.message}`);
+    // 异常后强制恢复状态，防止卡死
+    state = TASK_STATE.IDLE;
+    searchAbortFlag = false;
   }
 }
 
 /**
  * 带优先级的监控执行
  * 搜索运行中 → 暂停搜索 → 执行监控 → 回首页 → 恢复搜索
+ * 异常后强制恢复状态，防止状态机卡死
  */
 async function executeMonitorWithPriority(blogger, cfg) {
   const searchEngine = require('./search');
+  const monitorEngine = require('./monitor');
 
   // 如果搜索正在运行，暂停它
   if (state === TASK_STATE.SEARCHING) {
@@ -80,12 +83,16 @@ async function executeMonitorWithPriority(blogger, cfg) {
       if (!searchEngine.isRunning()) break;
       await sleep(500);
     }
+    // 超时强制标记停止
+    if (searchEngine.isRunning()) {
+      log('搜索任务未能在10秒内停止，强制终止');
+      searchEngine.stopSearch();
+    }
   }
 
-  // 执行监控
+  // 执行监控（带异常恢复）
   state = TASK_STATE.MONITORING;
   try {
-    const monitorEngine = require('./monitor');
     await monitorEngine.executeSingleBlogger(blogger, cfg, logCallback);
 
     // 监控完成后回到首页
@@ -96,17 +103,33 @@ async function executeMonitorWithPriority(blogger, cfg) {
     }
   } catch (e) {
     log(`监控执行异常: ${e.message}`);
+    // 异常后尝试回首页恢复
+    try {
+      const { getDouyinView } = require('../main/window');
+      const view = getDouyinView();
+      if (view && view.webContents) {
+        await navigateHome(view);
+      }
+    } catch (e2) {
+      log(`恢复首页失败: ${e2.message}`);
+    }
   }
 
-  // 恢复搜索
-  if (searchAbortFlag && searchParams) {
-    state = TASK_STATE.IDLE;
-    searchAbortFlag = false;
-    log('监控完成，恢复搜索任务');
-    state = TASK_STATE.SEARCHING;
-    const searchEngine = require('./search');
-    await searchEngine.startSearch(searchParams, logCallback);
-  } else {
+  // 恢复搜索（带超时保护）
+  try {
+    if (searchAbortFlag && searchParams) {
+      state = TASK_STATE.IDLE;
+      searchAbortFlag = false;
+      log('监控完成，恢复搜索任务');
+      state = TASK_STATE.SEARCHING;
+      await searchEngine.startSearch(searchParams, logCallback);
+    } else {
+      state = TASK_STATE.IDLE;
+      searchAbortFlag = false;
+    }
+  } catch (e) {
+    log(`恢复搜索异常: ${e.message}`);
+    // 最终兜底：强制恢复到 IDLE 状态
     state = TASK_STATE.IDLE;
     searchAbortFlag = false;
   }

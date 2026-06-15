@@ -66,8 +66,10 @@ function processComment(cdpComment, domComment, videoInfo, keywords) {
   // 入库
   database.addIntentComment(result);
 
-  // 异步推送通知
-  notifier.notify(result);
+  // 异步推送通知（捕获异常避免未处理拒绝）
+  notifier.notify(result).catch(e => {
+    logger.warn(`推送通知失败: ${e.message}`);
+  });
 
   logger.info(`[命中] ${result.nickname}: ${result.text.slice(0, 30)} -> ${matchedKeywords.join(',')} (${result.source})`);
 

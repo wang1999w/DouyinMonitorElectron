@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onConfigUpdated: (cb) => ipcRenderer.on('config-updated', (_, c) => cb(c)),
   onWechatSent: (cb) => ipcRenderer.on('wechat-sent', (_, r) => cb(r)),
   onResizePanel: (cb) => ipcRenderer.on('resize-panel', (_, s) => cb(s)),
+  onErrorNotify: (cb) => ipcRenderer.on('error-notify', (_, msg) => cb(msg)),
 
   // ========== 渲染进程 → 主进程（invoke 调用） ==========
   startSearch: (params) => ipcRenderer.invoke('start-search', params),

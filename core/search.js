@@ -176,14 +176,23 @@ async function ensureLogin(view) {
     const body = await view.webContents.executeJavaScript('document.body.innerText.substring(0, 300)');
     if (body.includes('登录') && body.length < 100) {
       log('请在浏览器中登录抖音...');
-      for (let i = 0; i < 100; i++) {
+      const LOGIN_TIMEOUT = 120; // 最多等待 6 分钟（120 * 3秒）
+      for (let i = 0; i < LOGIN_TIMEOUT; i++) {
         await sleep(3000);
         if (!searchRunning) return;
-        const b = await view.webContents.executeJavaScript('document.body.innerText.substring(0, 300)');
-        if (!b.includes('登录') || b.length > 100) { log('登录成功'); break; }
+        try {
+          const b = await view.webContents.executeJavaScript('document.body.innerText.substring(0, 300)');
+          if (!b.includes('登录') || b.length > 100) { log('登录成功'); return; }
+        } catch (e) {
+          log('检查登录状态异常，重试...');
+        }
       }
+      log('登录超时（6分钟），搜索任务终止');
+      searchRunning = false;
     }
-  } catch (e) {}
+  } catch (e) {
+    log(`检查登录状态失败: ${e.message}`);
+  }
 }
 
 /** 通过地址栏导航（模拟真人：Ctrl+L → 输入 → 回车） */

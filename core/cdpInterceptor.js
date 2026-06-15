@@ -293,10 +293,12 @@ class CDPInterceptor {
   stop(webContents) {
     try {
       if (webContents && webContents.debugger.isAttached()) {
-        webContents.debugger.sendCommand('Network.disable', {});
+        webContents.debugger.sendCommand('Network.disable', {}).catch(() => {});
         webContents.debugger.detach();
       }
-    } catch (e) {}
+    } catch (e) {
+      logger.warn(`CDP 停止异常: ${e.message}`);
+    }
     this.comments = {};
     this.searchVideos = [];
     logger.info('CDP 拦截器已停止');
