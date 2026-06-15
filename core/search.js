@@ -26,16 +26,15 @@ function checkRunning() { return searchRunning; }
 
 function stopSearch() {
   searchRunning = false;
-  if (currentTask) currentTask.stopped = true;
   searchPaused = false;
+  if (currentTask) currentTask.stopped = true;
   log('🛑 搜索已停止');
 }
 
 function pauseSearch() {
-  if (searchRunning) {
-    searchPaused = !searchPaused;
-    log(searchPaused ? '⏸ 暂停' : '▶ 继续');
-  }
+  if (!searchRunning) return;
+  searchPaused = !searchPaused;
+  log(searchPaused ? '⏸ 暂停' : '▶ 继续');
 }
 
 function isRunning() { return searchRunning; }
@@ -49,7 +48,9 @@ async function wait(ms) {
     if (!searchRunning) return false;
     if (searchPaused) {
       log('⏸ 已暂停，等待恢复...');
-      while (searchPaused && searchRunning) await sleep(300);
+      while (searchPaused && searchRunning) {
+        await sleep(500);
+      }
       if (!searchRunning) return false;
       log('▶ 已恢复');
     }
@@ -192,6 +193,9 @@ async function startSearch(params, onLog, onResult) {
           log(`  📊 列表评论数: ${listCommentCount}`);
         }
 
+        // 处理前就标记已处理（防止重复处理）
+        task.processedIds.add(v.aid);
+
         // 处理视频（核心）
         const result = await videoProcessor.processVideo({
           view,
@@ -203,9 +207,6 @@ async function startSearch(params, onLog, onResult) {
           onLog: log,
           cutoffTs
         });
-
-        // 无论成功失败都标记已处理
-        task.processedIds.add(v.aid);
 
         if (result.skipped) {
           fails++;
@@ -337,25 +338,41 @@ async function doSearch(view, keyword) {
 async function doFilter(view, params) {
   const wc = view.webContents;
   const fp = await findText(view, '筛选');
-  if (!fp) { log('  筛选未找到'); return; }
+  if (!fp) { log('  ❌ 筛选未找到'); return; }
 
+  // 悬停打开筛选面板
   await human.mouseHover(wc, fp.x, fp.y, 50, 20, 2000);
   await sleep(2000, 2500);
 
+  // 选择排序
   const sortMap = { likes: '最多点赞', newest: '最新发布' };
   if (params.sortMode && sortMap[params.sortMode]) {
     const p = await findText(view, sortMap[params.sortMode]);
-    if (p) { await human.mouseClick(wc, p.x, p.y); log(`  排序: ${sortMap[params.sortMode]}`); await sleep(1500, 2500); }
+    if (p) {
+      await human.mouseClick(wc, p.x, p.y);
+      log(`  ✓ 排序: ${sortMap[params.sortMode]}`);
+      await sleep(1500, 2500);
+    } else {
+      log(`  ⚠ 排序选项未找到: ${sortMap[params.sortMode]}`);
+    }
   }
 
+  // 选择时间
   const timeMap = { '1': '一天内', '7': '一周内', '180': '半年内' };
   if (params.filterTime && timeMap[params.filterTime]) {
     const p = await findText(view, timeMap[params.filterTime]);
-    if (p) { await human.mouseClick(wc, p.x, p.y); log(`  时间: ${timeMap[params.filterTime]}`); await sleep(1500, 2500); }
+    if (p) {
+      await human.mouseClick(wc, p.x, p.y);
+      log(`  ✓ 时间: ${timeMap[params.filterTime]}`);
+      await sleep(1500, 2500);
+    } else {
+      log(`  ⚠ 时间选项未找到: ${timeMap[params.filterTime]}`);
+    }
   }
 
+  // 点击筛选按钮关闭面板
   await human.mouseClick(wc, fp.x, fp.y);
-  log('  ✅ 筛选已应用');
+  log('  ✓ 筛选已应用');
   await sleep(2000, 3000);
 }
 

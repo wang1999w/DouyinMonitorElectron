@@ -1,11 +1,11 @@
 /**
- * 视频处理流程（自知版）
+ * 视频处理流程（全面修复版）
  *
- * 每步操作：
- *   1. 知道自己在做什么
- *   2. 验证操作结果
- *   3. 失败时记录原因
- *   4. 不盲目重试
+ * 修复清单：
+ *   1. 评论滚动根据数量判断（>9才滚动）
+ *   2. 时效过滤不杀 DOM 评论（无时间戳的保留）
+ *   3. 暂停/停止在每步检查
+ *   4. 重复视频不处理
  */
 
 const dom = require('./domUtils');
@@ -28,10 +28,7 @@ async function processVideo(ctx) {
     // ===== 1. 点击视频 =====
     _log('  1️⃣ 点击视频...');
     const clicked = await dom.clickVideoById(view, aid);
-    if (!clicked) {
-      result.skipped = '点击失败';
-      return result;
-    }
+    if (!clicked) { result.skipped = '点击失败'; return result; }
 
     // ===== 2. 等待加载 =====
     _log('  2️⃣ 等待加载...');
@@ -58,10 +55,9 @@ async function processVideo(ctx) {
     await human.keyPress(wc, 'x');
     if (!await wait(3000, 5000)) { result.skipped = '被中断'; return result; }
 
-    // 检查是否打开
     let commentOpen = await dom.isCommentOpen(view);
     if (!commentOpen) {
-      _log('     未打开，再试一次...');
+      _log('     未打开，再试...');
       await human.keyPress(wc, 'x');
       if (!await wait(3000, 5000)) { result.skipped = '被中断'; return result; }
       commentOpen = await dom.isCommentOpen(view);
@@ -74,9 +70,17 @@ async function processVideo(ctx) {
     }
     _log('     ✓ 已打开');
 
-    // ===== 6. 滚动加载 =====
+    // ===== 6. 根据评论数决定滚动策略 =====
     _log('  6️⃣ 滚动加载评论...');
-    await dom.scrollCommentPanel(view, 10, 150);
+    if (commentCount > 9) {
+      // 评论数 > 9，真实模拟鼠标滚轮滚动
+      const scrollTimes = Math.min(Math.ceil(commentCount / 5), 15);
+      _log(`     评论${commentCount}条，滚动${scrollTimes}次`);
+      await dom.scrollCommentPanel(view, scrollTimes, 150);
+    } else if (commentCount > 0) {
+      // 评论数 1-9，不需要滚动
+      _log(`     评论${commentCount}条，无需滚动`);
+    }
     if (!check()) { result.skipped = '被中断'; return result; }
 
     // ===== 7. 采集评论 =====
@@ -84,20 +88,33 @@ async function processVideo(ctx) {
     if (cdp) cdp.beginCollect(aid);
     const cdpComments = cdp ? cdp.getComments(aid) : [];
     const domComments = await dom.readDomComments(view);
-    const domOnly = domComments.filter(d => !cdpComments.some(c => c.text === d.text));
-    let allComments = [...cdpComments, ...domOnly];
+
+    // 合并：CDP 有时间戳的评论 + DOM 所有评论（去重）
+    const allTexts = new Set();
+    let allComments = [];
+
+    // CDP 评论（有完整数据，按时间过滤）
+    for (const c of cdpComments) {
+      const text = (c.text || '').trim();
+      if (!text || allTexts.has(text)) continue;
+      allTexts.add(text);
+      const ct = c.create_time || 0;
+      if (cutoffTs > 0 && ct > 0 && ct < cutoffTs) continue;
+      allComments.push(c);
+    }
+
+    // DOM 评论（无时间戳，全部保留）
+    for (const d of domComments) {
+      const text = (d.text || '').trim();
+      if (!text || allTexts.has(text)) continue;
+      allTexts.add(text);
+      allComments.push(d);
+    }
 
     // 补充视频信息
     if (cdp?.currentVideo?.aweme_id === aid) {
       videoInfo.desc = cdp.currentVideo.desc || '';
       videoInfo.author = cdp.currentVideo.author || '';
-    }
-
-    // 时效过滤
-    if (cutoffTs > 0) {
-      const before = allComments.length;
-      allComments = allComments.filter(c => (c.create_time || 0) >= cutoffTs);
-      if (before > allComments.length) _log(`     时效过滤: ${before - allComments.length}条`);
     }
 
     result.cdp = cdpComments.length;
@@ -151,17 +168,16 @@ async function closeAndEscape(wc) {
 async function wait(ms) {
   const step = 500;
   for (let t = 0; t < ms; t += step) {
-    const search = require('./search');
-    if (!search.isRunning()) return false;
-    // 检查暂停状态
-    if (search.isPaused && search.isPaused()) {
-      _log('     ⏸ 已暂停');
-      while (search.isPaused && search.isPaused() && search.isRunning()) {
-        await sleep(500);
-      }
+    try {
+      const search = require('./search');
       if (!search.isRunning()) return false;
-      _log('     ▶ 已恢复');
-    }
+      if (search.isPaused && search.isPaused()) {
+        while (search.isPaused() && search.isRunning()) {
+          await sleep(500);
+        }
+        if (!search.isRunning()) return false;
+      }
+    } catch(_) {}
     await sleep(step);
   }
   return true;
