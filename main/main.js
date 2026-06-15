@@ -183,6 +183,12 @@ app.whenReady().then(() => {
     });
   }
 
+  // 启动时初始化通知器
+  try {
+    const cfg = require('../core/config').loadConfig();
+    require('../core/notifier').reload(cfg);
+  } catch (e) {}
+
   const scheduler = require('../core/scheduler');
   scheduler.init((msg) => {
     if (mainWindow && mainWindow.webContents) {

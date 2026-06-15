@@ -30,10 +30,15 @@ let searchEngine = null;
 let monitorEngine = null;
 let statsTimer = null;
 
+let dbReady = false;
+
 function loadCoreModules() {
   if (!database) {
     database = require('../core/database');
-    database.initDatabase().catch(() => {});
+    database.initDatabase().then(() => { dbReady = true; }).catch((e) => {
+      console.error('数据库初始化失败:', e.message);
+      dbReady = true; // 即使失败也标记为 ready，避免阻塞
+    });
     config = require('../core/config');
     matchModule = require('../core/match');
     emailModule = require('../core/email');
@@ -41,6 +46,15 @@ function loadCoreModules() {
     notifier = require('../core/notifier');
     searchEngine = require('../core/search');
     monitorEngine = require('../core/monitor');
+  }
+}
+
+async function ensureDbReady() {
+  if (!database) loadCoreModules();
+  // 等待数据库初始化完成（最多5秒）
+  for (let i = 0; i < 10; i++) {
+    if (dbReady) return;
+    await new Promise(r => setTimeout(r, 500));
   }
 }
 
@@ -63,8 +77,8 @@ function registerIpcHandlers(mainWindow) {
   });
 
   // ========== 统计 ==========
-  ipcMain.handle('get-stats', () => {
-    loadCoreModules();
+  ipcMain.handle('get-stats', async () => {
+    await ensureDbReady();
     return database.getStats();
   });
 

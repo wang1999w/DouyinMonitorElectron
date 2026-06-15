@@ -224,10 +224,13 @@ function registerSearch(params) {
 }
 
 function notifySearchDone() {
-  if (state !== TASK_STATE.SEARCH_PAUSED && state !== TASK_STATE.MONITORING) {
+  // 如果是被监控抢占的，不清理 searchParams（恢复时需要）
+  if (state === TASK_STATE.SEARCH_PAUSED || state === TASK_STATE.MONITORING) {
+    // 保留 searchParams 以便恢复
+  } else {
     state = TASK_STATE.IDLE;
+    searchParams = null;
   }
-  searchParams = null;
 }
 
 function notifyMonitorDone(secUid) {

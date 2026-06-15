@@ -264,10 +264,9 @@ async function executeSearch(view, keyword, task) {
     await human.keyPress(wc, 'Enter');
   }
 
-  // 步骤5：等待搜索结果（用 waitForElement 替代固定 sleep）
+  // 等待搜索结果
   log('  等待搜索结果...');
-  const resultReady = await dom.waitForElement(wc, '[data-e2e="searchbar-button"]', 10000);
-  await dom.sleep(2000, 3000);
+  await dom.sleep(3000, 5000);
 
   // 验证是否到搜索结果页
   const url = await execJS(wc, 'location.href') || '';

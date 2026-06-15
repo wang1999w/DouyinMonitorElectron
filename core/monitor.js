@@ -36,6 +36,9 @@ function startMonitor(onLog, onProgress) {
   logCallback = onLog;
   progressCallback = onProgress || null;
   log('监控已启动（手动模式）');
+
+  // 立即执行所有启用的博主
+  executeAllBloggers().catch(e => log(`监控异常: ${e.message}`));
   return true;
 }
 
@@ -43,6 +46,31 @@ function stopMonitor() {
   if (currentTask) currentTask.stopped = true;
   monitorRunning = false;
   log('监控已停止');
+}
+
+/**
+ * 执行所有启用博主的监控
+ */
+async function executeAllBloggers() {
+  try {
+    const cfg = require('./config').loadConfig();
+    const bloggers = (cfg.monitor_bloggers || []).filter(b => b.status === 1);
+    if (bloggers.length === 0) {
+      log('无启用的监控博主');
+      monitorRunning = false;
+      return;
+    }
+    log(`开始监控 ${bloggers.length} 个博主`);
+    for (const blogger of bloggers) {
+      if (!monitorRunning) break;
+      await executeSingleBlogger(blogger, cfg, logCallback, progressCallback);
+    }
+    log('所有博主监控完成');
+  } catch (e) {
+    log(`监控异常: ${e.message}`);
+  } finally {
+    monitorRunning = false;
+  }
 }
 
 /**
@@ -105,7 +133,7 @@ async function executeSingleBlogger(blogger, cfg, onLog, onProgress) {
     if (task.stopped) return stats;
 
     // 3. 扫描视频列表
-    const videos = await dom.scanBloggerVideos(view);
+    const videos = await dom.scanVideoLinks(view);
     log(`  发现 ${videos.length} 个视频`);
     task.videoTotal = videos.length;
     if (videos.length === 0) return stats;
