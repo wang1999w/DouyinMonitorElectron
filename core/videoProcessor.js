@@ -72,14 +72,19 @@ async function processVideo(ctx) {
 
     // ===== 6. 根据评论数决定滚动策略 =====
     _log('  6️⃣ 滚动加载评论...');
-    if (commentCount > 9) {
+    const commentCountDom = await dom.getCommentCount(view);
+    if (commentCountDom > 9) {
       // 评论数 > 9，真实模拟鼠标滚轮滚动
-      const scrollTimes = Math.min(Math.ceil(commentCount / 5), 15);
-      _log(`     评论${commentCount}条，滚动${scrollTimes}次`);
+      const scrollTimes = Math.min(Math.ceil(commentCountDom / 5), 15);
+      _log(`     评论${commentCountDom}条，滚动${scrollTimes}次`);
       await dom.scrollCommentPanel(view, scrollTimes, 150);
-    } else if (commentCount > 0) {
-      // 评论数 1-9，不需要滚动
-      _log(`     评论${commentCount}条，无需滚动`);
+    } else if (commentCountDom === -1) {
+      // 评论数未知，尝试滚动几次加载
+      _log(`     评论数未知，尝试滚动加载`);
+      await dom.scrollCommentPanel(view, 5, 150);
+    } else {
+      // 评论数 <= 9，不需要滚动
+      _log(`     评论${commentCountDom}条，无需滚动`);
     }
     if (!check()) { result.skipped = '被中断'; return result; }
 
@@ -89,11 +94,51 @@ async function processVideo(ctx) {
     const cdpComments = cdp ? cdp.getComments(aid) : [];
     const domComments = await dom.readDomComments(view);
 
-    // 合并：CDP 有时间戳的评论 + DOM 所有评论（去重）
+    // 从页面提取视频作者信息
+    const authorInfo = await wc.executeJavaScript(`
+      (function(){
+        const info = { author: '', desc: '' };
+        // 找博主名称（@开头的链接）
+        const userLinks = document.querySelectorAll('a[href*="/user/"]');
+        for (const a of userLinks) {
+          const r = a.getBoundingClientRect();
+          if (r.width > 5 && r.height > 5) {
+            const name = (a.innerText || '').trim().replace(/^@/, '');
+            if (name.length > 0 && name.length < 30) {
+              info.author = name;
+              info.authorProfile = a.getAttribute('href') || '';
+              break;
+            }
+          }
+        }
+        // 找视频描述
+        const spans = document.querySelectorAll('span, p');
+        for (const s of spans) {
+          const t = (s.innerText || '').trim();
+          if (t.length > 10 && t.length < 500 && t.includes('#')) {
+            info.desc = t;
+            break;
+          }
+        }
+        return info;
+      })()
+    `).catch(() => ({ author: '', desc: '' }));
+
+    // 补充视频信息
+    if (cdp?.currentVideo?.aweme_id === aid) {
+      videoInfo.desc = videoInfo.desc || cdp.currentVideo.desc || authorInfo.desc || '';
+      videoInfo.author = videoInfo.author || cdp.currentVideo.author || authorInfo.author || '';
+    } else {
+      videoInfo.desc = videoInfo.desc || authorInfo.desc || '';
+      videoInfo.author = videoInfo.author || authorInfo.author || '';
+    }
+
+    result.cdp = cdpComments.length;
+    result.dom = domComments.length;
+
+    // 合并 CDP + DOM 评论（CDP 优先，DOM 补充，去重）
     const allTexts = new Set();
     let allComments = [];
-
-    // CDP 评论（有完整数据，按时间过滤）
     for (const c of cdpComments) {
       const text = (c.text || '').trim();
       if (!text || allTexts.has(text)) continue;
@@ -102,8 +147,6 @@ async function processVideo(ctx) {
       if (cutoffTs > 0 && ct > 0 && ct < cutoffTs) continue;
       allComments.push(c);
     }
-
-    // DOM 评论（无时间戳，全部保留）
     for (const d of domComments) {
       const text = (d.text || '').trim();
       if (!text || allTexts.has(text)) continue;
@@ -111,14 +154,6 @@ async function processVideo(ctx) {
       allComments.push(d);
     }
 
-    // 补充视频信息
-    if (cdp?.currentVideo?.aweme_id === aid) {
-      videoInfo.desc = cdp.currentVideo.desc || '';
-      videoInfo.author = cdp.currentVideo.author || '';
-    }
-
-    result.cdp = cdpComments.length;
-    result.dom = domComments.length;
     result.effective = allComments.length;
     _log(`     CDP:${cdpComments.length} DOM:${domComments.length} 有效:${allComments.length}`);
 

@@ -43,15 +43,15 @@ function isPaused() { return searchPaused; }
 // ========== 可中断等待 ==========
 
 async function wait(ms) {
-  const step = 500;
+  const step = 300;
   for (let t = 0; t < ms; t += step) {
     if (!searchRunning) return false;
     if (searchPaused) {
-      log('⏸ 已暂停，等待恢复...');
-      while (searchPaused && searchRunning) {
-        await sleep(500);
+      log('⏸ 已暂停');
+      while (searchPaused) {
+        await sleep(300);
+        if (!searchRunning) return false;
       }
-      if (!searchRunning) return false;
       log('▶ 已恢复');
     }
     await sleep(step);
@@ -347,7 +347,7 @@ async function doFilter(view, params) {
   // 选择排序
   const sortMap = { likes: '最多点赞', newest: '最新发布' };
   if (params.sortMode && sortMap[params.sortMode]) {
-    const p = await findText(view, sortMap[params.sortMode]);
+    const p = await findTextContains(view, sortMap[params.sortMode]);
     if (p) {
       await human.mouseClick(wc, p.x, p.y);
       log(`  ✓ 排序: ${sortMap[params.sortMode]}`);
@@ -360,7 +360,7 @@ async function doFilter(view, params) {
   // 选择时间
   const timeMap = { '1': '一天内', '7': '一周内', '180': '半年内' };
   if (params.filterTime && timeMap[params.filterTime]) {
-    const p = await findText(view, timeMap[params.filterTime]);
+    const p = await findTextContains(view, timeMap[params.filterTime]);
     if (p) {
       await human.mouseClick(wc, p.x, p.y);
       log(`  ✓ 时间: ${timeMap[params.filterTime]}`);
@@ -399,6 +399,20 @@ async function findText(view, text) {
       if(t==='${text.replace(/'/g,"\\'")}'){
         const r=el.getBoundingClientRect();
         if(r.width>10&&r.height>10&&r.height<50&&r.y<200&&r.y>30)
+          return{x:r.x+r.width/2,y:r.y+r.height/2};
+      }
+    }
+    return null;
+  })()`);
+}
+
+async function findTextContains(view, text) {
+  return await js(view.webContents, `(function(){
+    for(const el of document.querySelectorAll('*')){
+      const t=(el.innerText||'').trim();
+      if(t.includes('${text.replace(/'/g,"\\\'")}')){
+        const r=el.getBoundingClientRect();
+        if(r.width>10&&r.height>10&&r.height<60&&r.y>30&&r.y<300)
           return{x:r.x+r.width/2,y:r.y+r.height/2};
       }
     }

@@ -24,37 +24,30 @@ const logger = getLogger('DataPipeline');
  * @returns {Object|null} 处理后的完整评论数据，null 表示无效
  */
 function processComment(cdpComment, domComment, videoInfo, keywords) {
-  // 合并数据（CDP 优先，DOM 补充）
   const merged = mergeCommentData(cdpComment, domComment);
-
   if (!merged || !merged.text || merged.text.length < 3) return null;
-
-  // 去重检查
   if (isDuplicate(merged)) return null;
 
-  // 关键词匹配
   const [matched, matchedKeywords, isGarbage] = matchIntent(
     merged.text, keywords.intent || [], keywords.garbage || []
   );
-
   if (!matched || isGarbage) return null;
 
-  // 计算评分
   const score = calcCommentScore(merged.create_time);
 
-  // 构建完整数据
+  // 构建完整数据（DOM 评论补全所有字段）
   const result = {
     comment_id: merged.comment_id || generateId(),
-    uid: merged.uid || '',
-    nickname: merged.nickname || '',
+    uid: merged.uid || merged.douyin_id || '',
+    nickname: merged.nickname || '未知',
     text: merged.text,
-    ip_label: merged.ip_label || '',
+    ip_label: merged.ip_label || '未采集',
     create_time: merged.create_time || 0,
     profile_url: merged.profile_url || '',
-    douyin_id: merged.douyin_id || '',
+    douyin_id: merged.douyin_id || merged.uid || '',
     aweme_id: videoInfo.aweme_id || merged.aweme_id || '',
-    video_desc: videoInfo.desc || merged.video_desc || '',
-    video_author: videoInfo.author || merged.video_author || '',
+    video_desc: videoInfo.desc || merged.video_desc || '未采集',
+    video_author: videoInfo.author || merged.video_author || '未采集',
     video_url: videoInfo.video_url || merged.video_url || `https://www.douyin.com/video/${videoInfo.aweme_id}`,
     matched_keywords: matchedKeywords,
     score: score,
@@ -63,16 +56,9 @@ function processComment(cdpComment, domComment, videoInfo, keywords) {
     source: cdpComment ? 'api' : 'dom'
   };
 
-  // 入库
   database.addIntentComment(result);
-
-  // 异步推送通知（捕获异常避免未处理拒绝）
-  notifier.notify(result).catch(e => {
-    logger.warn(`推送通知失败: ${e.message}`);
-  });
-
+  notifier.notify(result).catch(e => logger.warn(`推送失败: ${e.message}`));
   logger.info(`[命中] ${result.nickname}: ${result.text.slice(0, 30)} -> ${matchedKeywords.join(',')} (${result.source})`);
-
   return result;
 }
 

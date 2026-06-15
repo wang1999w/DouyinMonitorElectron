@@ -71,18 +71,16 @@ function buildMarkdown(item) {
     `${prefix}<font color="info">抖音意向评论实时告警</font>`,
     `> 评分: <font color="warning">${score}分</font> | ${scoreLabel}`,
     `---`,
-    `**用户昵称**: ${item.nickname || ''}`,
-    `**抖音号**: ${item.douyin_id || ''}`,
-    `**评论内容**: ${item.comment_text || ''}`,
-    `**命中关键词**: <font color="warning">${item.matched_keywords || ''}</font>`,
-    `**评论时间**: ${formatTime(item.comment_time)}`,
-    `**IP属地**: ${item.ip_label || ''}`,
-    `**所属博主**: ${item.video_author || ''}`,
+    `**用户昵称**: ${item.nickname || '未采集'}`,
+    `**抖音号**: ${item.douyin_id || '未采集'}`,
+    `**评论内容**: ${item.comment_text || item.text || '未采集'}`,
+    `**命中关键词**: <font color="warning">${item.matched_keywords || '未匹配'}</font>`,
+    `**评论时间**: ${formatTime(item.comment_time || item.create_time)}`,
+    `**IP属地**: ${item.ip_label || '未采集'}`,
+    `**所属博主**: ${item.video_author || '未采集'}`,
+    `**原作品**: [点击查看](${item.video_url || '未采集'})`,
+    `**用户主页**: ${item.profile_url || '未采集'}`,
   ];
-
-  if (item.video_url) {
-    lines.push(`**原作品**: [点击查看](${item.video_url})`);
-  }
 
   lines.push(`---`);
   lines.push(`> 系统自动采集 · 实时推送`);
