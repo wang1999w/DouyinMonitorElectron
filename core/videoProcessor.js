@@ -1,6 +1,11 @@
 /**
- * 视频处理流程
- * 每步操作都有日志，评论检测用多种选择器
+ * 视频处理流程（自知版）
+ *
+ * 每步操作：
+ *   1. 知道自己在做什么
+ *   2. 验证操作结果
+ *   3. 失败时记录原因
+ *   4. 不盲目重试
  */
 
 const dom = require('./domUtils');
@@ -11,147 +16,148 @@ const { getLogger } = require('./logger');
 const logger = getLogger('VideoProcessor');
 
 async function processVideo(ctx) {
-  const { view, aid, keywords, cdp, shouldContinue, onResult, cutoffTs = 0 } = ctx;
+  const { view, aid, keywords, cdp, shouldContinue, onResult, onLog, cutoffTs = 0 } = ctx;
   const wc = view.webContents;
-  const videoInfo = ctx.videoInfo || { aweme_id: aid, desc: '', author: '', video_url: `https://www.douyin.com/video/${aid}` };
+  const videoInfo = { aweme_id: aid, desc: '', author: '', video_url: `https://www.douyin.com/video/${aid}` };
   const result = { matched: 0, cdp: 0, dom: 0, effective: 0, skipped: '' };
 
   const check = () => shouldContinue ? shouldContinue() : true;
+  const _log = (msg) => { logger.info(msg); if (onLog) onLog(msg); };
 
   try {
-    // 1. 点击视频卡片
-    log('  🖱 点击视频...');
+    // ===== 1. 点击视频 =====
+    _log('  1️⃣ 点击视频...');
     const clicked = await dom.clickVideoById(view, aid);
-    if (!clicked) { result.skipped = 'not_found'; log('  ❌ 视频未找到'); return result; }
+    if (!clicked) {
+      result.skipped = '点击失败';
+      return result;
+    }
 
-    // 2. 等待加载
-    log('  ⏳ 等待视频加载...');
-    if (!await interruptibleSleep(5000, 8000)) return result;
+    // ===== 2. 等待加载 =====
+    _log('  2️⃣ 等待加载...');
+    if (!await wait(5000, 8000)) { result.skipped = '被中断'; return result; }
 
-    // 3. 模拟观看
-    log('  👁 模拟观看...');
+    // ===== 3. 模拟观看 =====
+    _log('  3️⃣ 模拟观看...');
     await human.mouseMove(wc, rand(300, 700), rand(200, 400));
-    if (!await interruptibleSleep(3000, 5000)) return result;
+    if (!await wait(3000, 5000)) { result.skipped = '被中断'; return result; }
 
-    // 4. 检查评论数
-    log('  📊 检查评论数...');
+    // ===== 4. 检查评论数 =====
+    _log('  4️⃣ 检查评论...');
     const commentCount = await dom.getCommentCount(view);
+    _log(`     评论数: ${commentCount === -1 ? '未知' : commentCount}`);
+
     if (commentCount === 0) {
-      result.skipped = 'no_comments';
-      log('  ⏭ 无评论（抢首评），跳过');
+      result.skipped = '无评论';
       await closeAndEscape(wc);
       return result;
     }
-    log(`  评论数: ${commentCount === -1 ? '未知' : commentCount}`);
 
-    // 5. 打开评论区
-    log('  💬 打开评论区...');
+    // ===== 5. 打开评论区 =====
+    _log('  5️⃣ 打开评论区...');
     await human.keyPress(wc, 'x');
-    if (!await interruptibleSleep(3000, 5000)) return result;
+    if (!await wait(3000, 5000)) { result.skipped = '被中断'; return result; }
 
-    // 检查评论区（多种选择器）
+    // 检查是否打开
     let commentOpen = await dom.isCommentOpen(view);
     if (!commentOpen) {
-      log('  评论区未打开，再按x...');
+      _log('     未打开，再试一次...');
       await human.keyPress(wc, 'x');
-      if (!await interruptibleSleep(3000, 5000)) return result;
+      if (!await wait(3000, 5000)) { result.skipped = '被中断'; return result; }
       commentOpen = await dom.isCommentOpen(view);
     }
 
     if (!commentOpen) {
-      // 尝试点击评论按钮
-      const btn = await js(wc, `(function(){
-        const el=document.querySelector('[data-e2e="feed-active-video"] [data-e2e="feed-comment-icon"],[class*="comment-icon"]');
-        if(el){const r=el.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};}
-        return null;
-      })()`);
-      if (btn) {
-        await human.mouseClick(wc, btn.x, btn.y);
-        if (!await interruptibleSleep(2000, 3000)) return result;
-        commentOpen = await dom.isCommentOpen(view);
-      }
-    }
-
-    if (!commentOpen) {
-      result.skipped = 'no_comment_panel';
-      log('  ❌ 评论区未打开');
+      result.skipped = '评论区未打开';
       await closeAndEscape(wc);
       return result;
     }
-    log('  ✓ 评论区已打开');
+    _log('     ✓ 已打开');
 
-    if (!check()) return result;
+    // ===== 6. 滚动加载 =====
+    _log('  6️⃣ 滚动加载评论...');
+    await dom.scrollCommentPanel(view, 10, 150);
+    if (!check()) { result.skipped = '被中断'; return result; }
 
-    // 6. 滚动加载评论
-    log('  📜 滚动加载评论...');
-    await dom.scrollCommentPanel(view, 12, 150);
-    if (!check()) return result;
-
-    // 7. 采集评论
-    log('  📥 采集评论...');
+    // ===== 7. 采集评论 =====
+    _log('  7️⃣ 采集评论...');
     if (cdp) cdp.beginCollect(aid);
     const cdpComments = cdp ? cdp.getComments(aid) : [];
     const domComments = await dom.readDomComments(view);
     const domOnly = domComments.filter(d => !cdpComments.some(c => c.text === d.text));
     let allComments = [...cdpComments, ...domOnly];
 
+    // 补充视频信息
     if (cdp?.currentVideo?.aweme_id === aid) {
-      videoInfo.desc = videoInfo.desc || cdp.currentVideo.desc || '';
-      videoInfo.author = videoInfo.author || cdp.currentVideo.author || '';
+      videoInfo.desc = cdp.currentVideo.desc || '';
+      videoInfo.author = cdp.currentVideo.author || '';
     }
 
     // 时效过滤
     if (cutoffTs > 0) {
       const before = allComments.length;
       allComments = allComments.filter(c => (c.create_time || 0) >= cutoffTs);
-      if (before > allComments.length) log(`  时效过滤: 排除${before - allComments.length}条`);
+      if (before > allComments.length) _log(`     时效过滤: ${before - allComments.length}条`);
     }
 
     result.cdp = cdpComments.length;
     result.dom = domComments.length;
     result.effective = allComments.length;
-    log(`  CDP:${cdpComments.length} DOM:${domComments.length} 有效:${allComments.length}`);
+    _log(`     CDP:${cdpComments.length} DOM:${domComments.length} 有效:${allComments.length}`);
 
-    // 8. 匹配入库
+    if (allComments.length === 0) {
+      result.skipped = '无有效评论';
+      if (cdp) cdp.endCollect(aid);
+      await closeAndEscape(wc);
+      return result;
+    }
+
+    // ===== 8. 匹配入库 =====
+    _log('  8️⃣ 匹配关键词...');
     let matched = 0;
     for (const c of allComments) {
       if (!check()) break;
       const r = pipeline.processComment(c, null, videoInfo, keywords);
-      if (r) { matched++; if (onResult) onResult(r); }
+      if (r) {
+        matched++;
+        if (onResult) onResult(r);
+      }
     }
     result.matched = matched;
-    log(`  🎯 命中: ${matched}条`);
 
-    // 9. 退出
+    // ===== 9. 退出 =====
     if (cdp) cdp.endCollect(aid);
     await closeAndEscape(wc);
 
     return result;
   } catch (e) {
-    result.skipped = 'exception';
+    result.skipped = `异常: ${e.message}`;
     if (cdp) try { cdp.endCollect(aid); } catch(_) {}
     try { await closeAndEscape(wc); } catch(_) {}
-    log(`  ❌ 异常: ${e.message}`);
+    _log(`  ❌ ${e.message}`);
     return result;
   }
 }
 
+// ========== 工具 ==========
+
 async function closeAndEscape(wc) {
-  try { await human.keyPress(wc, 'x'); await sleep(500, 1000); } catch(_) {}
-  try { await human.keyPress(wc, 'Escape'); await sleep(1500, 2500); } catch(_) {}
+  try { await human.keyPress(wc, 'x'); } catch(_) {}
+  await sleep(500, 1000);
+  try { await human.keyPress(wc, 'Escape'); } catch(_) {}
+  await sleep(1500, 2500);
 }
 
-async function interruptibleSleep(ms) {
+async function wait(ms) {
   const step = 500;
   for (let t = 0; t < ms; t += step) {
-    if (!require('./search').isRunning()) return false;
+    const { isRunning } = require('./search');
+    if (!isRunning()) return false;
     await sleep(step);
   }
   return true;
 }
 
-async function js(wc, s) { try { return await wc.executeJavaScript(s); } catch(_) { return null; } }
-function log(msg) { logger.info(msg); }
 function sleep(a, b) { const ms = b ? rand(a,b) : a; return new Promise(r => setTimeout(r, ms)); }
 function rand(a, b) { return Math.floor(Math.random()*(b-a)+a); }
 
