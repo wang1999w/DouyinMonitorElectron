@@ -55,7 +55,6 @@
           </div>
           <div class="ctrl-row">
             <label><input type="checkbox" id="search-add-hash" checked> 自动加 #</label>
-            <label><input type="checkbox" id="search-multi-kw"> 多关键词任务</label>
           </div>
           <div class="ctrl-row">
             <label>视频日期：</label>
@@ -64,8 +63,9 @@
               <option value="7" selected>7天内</option>
               <option value="30">30天内</option>
             </select>
-            <label>视频数量：</label>
+            <label>每词采集：</label>
             <input type="number" id="search-maxv" value="10" min="1" max="100" style="width:50px">
+            <label>个视频</label>
           </div>
           <div class="ctrl-row">
             <label>评论时间：</label>
@@ -77,16 +77,38 @@
             <label>最大评论：</label>
             <input type="number" id="search-maxc" value="200" min="1" style="width:50px">
           </div>
-          <div class="ctrl-row">
-            <label>排序：</label>
+
+          <!-- 排序开关 -->
+          <div class="ctrl-row" style="background:#f8f8f8;padding:6px 8px;border-radius:4px;">
+            <label><input type="checkbox" id="search-sort-enable" checked> 启用排序筛选</label>
+          </div>
+          <div id="search-sort-options" class="ctrl-row" style="padding:4px 8px;">
+            <label>排序方式：</label>
             <label><input type="radio" name="search-sort" value="likes" checked> 最多点赞</label>
             <label><input type="radio" name="search-sort" value="newest"> 最新发布</label>
             <label><input type="radio" name="search-sort" value="default"> 综合</label>
           </div>
+
           <div class="ctrl-row">
             <button id="btn-search-start" class="btn-primary">开始搜索抓取</button>
             <button id="btn-search-pause" class="btn-secondary" disabled>暂停</button>
             <button id="btn-search-stop" class="btn-danger" disabled>停止</button>
+          </div>
+
+          <!-- 任务进度 -->
+          <div id="search-progress" style="display:none;background:#f0f7ff;padding:8px 10px;border-radius:4px;margin-top:6px;font-size:12px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+              <span id="sp-keyword">关键词: -</span>
+              <span id="sp-status" style="color:#1a73e8;">运行中</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;">
+              <span id="sp-video">视频: 0/0</span>
+              <span id="sp-comment">评论: 0</span>
+              <span id="sp-match">命中: 0</span>
+            </div>
+            <div style="background:#e0e0e0;border-radius:2px;height:4px;margin-top:4px;">
+              <div id="sp-bar" style="background:#1a73e8;height:100%;border-radius:2px;width:0%;transition:width 0.3s;"></div>
+            </div>
           </div>
 
           <!-- 定时任务设置 -->

@@ -1,15 +1,12 @@
 /**
- * 搜索引擎模块（重构版）
+ * 搜索引擎模块
  *
- * 采集流程：
- *   1. 地址栏输入搜索页 URL → 回车（模拟真人导航）
- *   2. 模拟点击视频标签 → 扫描视频列表
- *   3. 逐个模拟点击视频 → 等待播放 → 滚动加载评论
- *   4. CDP 拦截 API 响应获取完整评论 JSON（用户ID/昵称/IP/时间）
- *   5. DOM 采集补充 CDP 漏掉的数据
- *   6. pipeline.js 合并 → 匹配 → 评分 → 入库 → 推送
+ * 两种执行模式：
+ *   1. 数量模式（排序开启）：搜索 → 切换视频标签 → 筛选排序 → 采集指定数量视频
+ *   2. 时间模式（排序关闭）：搜索 → 自然浏览 → 持续采集直到任务时间结束
  *
- * 所有操作：鼠标移动(贝塞尔曲线) + 键盘输入(逐字) + 滚动(分步)
+ * 自动化操作全部模拟真人：地址栏导航 + 鼠标点击 + 键盘输入
+ * CDP 拦截 API 响应获取完整评论数据（用户ID/昵称/IP/时间）
  */
 
 const { getDouyinView, getCDPInterceptor } = require('../main/window');
@@ -32,7 +29,8 @@ async function startSearch(params, onLog, onResult) {
   logCallback = onLog;
   scheduler.registerSearch(params);
 
-  log('搜索任务启动...');
+  const isQuantityMode = params.sortEnabled; // 排序开启 = 数量模式
+  log(`搜索任务启动 [${isQuantityMode ? '数量模式' : '时间模式'}]`);
 
   try {
     const view = getDouyinView();
@@ -42,13 +40,12 @@ async function startSearch(params, onLog, onResult) {
 
     const keywords = params.keywords || [];
     const cdp = getCDPInterceptor();
-    let totalComments = 0;
-    let totalMatched = 0;
-
     const cfg = require('./config').loadConfig();
     const intentKw = cfg.search_intent_keywords || [];
     const garbageKw = cfg.search_garbage_keywords || [];
     const cutoffTs = Math.floor(Date.now() / 1000) - (params.commentHours || 60) * 60;
+
+    let totalMatched = 0;
 
     for (let kwIdx = 0; kwIdx < keywords.length; kwIdx++) {
       if (!searchRunning || scheduler.shouldAbortSearch()) break;
@@ -60,92 +57,59 @@ async function startSearch(params, onLog, onResult) {
       await navigateToSearch(view, kw);
       await sleep(5000, 7000);
 
-      // 2. 模拟点击"视频"标签
+      // 2. 切换到"视频"标签页（搜索默认是"综合"）
+      log('  切换到视频标签...');
       await clickByText(view, '视频');
       await sleep(2000, 3000);
 
-      // 3. 扫描视频列表
-      const videos = await scanVideos(view);
-      log(`发现 ${videos.length} 个视频`);
-
-      const maxVideos = params.maxVideos || 10;
-
-      for (let i = 0; i < Math.min(videos.length, maxVideos); i++) {
-        if (!searchRunning || scheduler.shouldAbortSearch()) break;
-
-        const video = videos[i];
-        log(`[${i + 1}/${Math.min(videos.length, maxVideos)}] 处理视频 ${video.aid}`);
-
-        // 模拟点击视频卡片
-        const clicked = await clickVideoById(view, video.aid);
-        if (!clicked) { log('  未定位到视频，跳过'); continue; }
-        await sleep(3000, 5000);
-
-        // 4. 模拟观看 + 滚动加载评论
-        const videoInfo = { aweme_id: video.aid, desc: '', author: '', video_url: `https://www.douyin.com/video/${video.aid}` };
-
-        // 先等几秒模拟观看
-        await human.mouseMove(view.webContents, rand(300, 700), rand(200, 400));
-        await sleep(3000, 6000);
-
-        // 打开评论区（模拟按 x）
-        await human.keyPress(view.webContents, 'x');
-        await sleep(3000, 4000);
-
-        // 滚动加载评论（模拟真人浏览）
-        const maxComments = params.maxComments || 200;
-        const cdpComments = cdp ? cdp.getComments(video.aid) : [];
-        let domComments = [];
-
-        for (let scroll = 0; scroll < 20; scroll++) {
-          if (!searchRunning) break;
-
-          // DOM 采集当前可见评论
-          domComments = await readDomComments(view);
-
-          // 模拟鼠标滚动评论区
-          await human.mouseScroll(view.webContents, 'down', 1);
-
-          // 随机模拟浏览（偶尔移动鼠标）
-          if (Math.random() < 0.3) {
-            await human.mouseMove(view.webContents, rand(600, 900), rand(300, 600));
-          }
-          await sleep(1000, 2000);
-
-          if (domComments.length >= maxComments) break;
-        }
-
-        // 5. 通过 pipeline 合并处理 CDP + DOM 数据
-        let videoComments = cdp ? cdp.getComments(video.aid) : [];
-        // 合并 DOM 评论（补充 CDP 没有的）
-        const domOnly = domComments.filter(d => !videoComments.some(c => c.text === d.text));
-        videoComments = [...videoComments, ...domOnly];
-
-        // 从 CDP 获取视频信息
-        if (cdp && cdp.currentVideo && cdp.currentVideo.aweme_id === video.aid) {
-          videoInfo.desc = cdp.currentVideo.desc || '';
-          videoInfo.author = cdp.currentVideo.author || '';
-        }
-
-        // 6. 逐条处理
-        for (const c of videoComments) {
-          if (!searchRunning) break;
-          const result = pipeline.processComment(c, null, videoInfo, { intent: intentKw, garbage: garbageKw });
-          if (result) {
-            totalComments++;
-            totalMatched++;
-            if (onResult) onResult(result);
-          }
-        }
-
-        log(`  CDP: ${cdpComments.length}条, DOM: ${domComments.length}条, 命中: ${totalMatched}条`);
-
-        // 模拟 ESC 退出视频
-        await human.keyPress(view.webContents, 'Escape');
+      // 3. 数量模式：执行排序筛选
+      if (isQuantityMode && params.sortMode && params.sortMode !== 'default') {
+        log(`  执行排序筛选: ${params.sortMode}`);
+        await applySortFilter(view, params.sortMode, params.days);
         await sleep(2000, 3000);
+      }
 
-        // 随机暂停模拟浏览
-        await sleep(5000, 15000);
+      // 4. 扫描视频列表
+      const videos = await scanVideos(view);
+      log(`  发现 ${videos.length} 个视频`);
+
+      if (isQuantityMode) {
+        // 数量模式：采集指定数量
+        const maxVideos = params.maxVideos || 10;
+        for (let i = 0; i < Math.min(videos.length, maxVideos); i++) {
+          if (!searchRunning || scheduler.shouldAbortSearch()) break;
+          log(`  [${i + 1}/${Math.min(videos.length, maxVideos)}] 处理视频 ${videos[i].aid}`);
+          const matched = await processVideo(view, videos[i].aid, params, intentKw, garbageKw, cdp, onResult);
+          totalMatched += matched;
+          await sleep(5000, 15000);
+        }
+      } else {
+        // 时间模式：自然浏览，持续采集直到任务时间到
+        let videoIdx = 0;
+        const startTime = Date.now();
+        const maxDuration = (params.commentHours || 60) * 60 * 1000; // 用评论时间参数作为任务持续时间
+
+        while (searchRunning && !scheduler.shouldAbortSearch() && videoIdx < videos.length) {
+          log(`  [${videoIdx + 1}/${videos.length}] 处理视频 ${videos[videoIdx].aid}`);
+          const matched = await processVideo(view, videos[videoIdx].aid, params, intentKw, garbageKw, cdp, onResult);
+          totalMatched += matched;
+          videoIdx++;
+
+          // 模拟自然浏览间隔
+          await sleep(5000, 15000);
+
+          // 每处理几个视频后滚动加载更多
+          if (videoIdx % 3 === 0 && videoIdx < videos.length) {
+            log('  滚动加载更多视频...');
+            await human.mouseScroll(view.webContents, 'down', 2);
+            await sleep(2000, 3000);
+            // 重新扫描
+            const moreVideos = await scanVideos(view);
+            for (const v of moreVideos) {
+              if (!videos.some(x => x.aid === v.aid)) videos.push(v);
+            }
+          }
+        }
       }
     }
 
@@ -158,16 +122,85 @@ async function startSearch(params, onLog, onResult) {
   }
 }
 
-function stopSearch() {
-  searchRunning = false;
-  log('搜索已停止');
-}
+// ========== 排序筛选 ==========
 
-function pauseSearch() {
-  log('搜索已暂停（由监控任务触发）');
-}
+/**
+ * 在搜索结果页执行排序筛选
+ * 模拟点击"筛选"按钮 → 选择排序方式 → 选择时间范围
+ */
+async function applySortFilter(view, sortMode, days) {
+  const wc = view.webContents;
 
-function isRunning() { return searchRunning; }
+  // 模拟点击"筛选"按钮
+  const filterPos = await wc.executeJavaScript(`
+    (function() {
+      for (const el of document.querySelectorAll('*')) {
+        const t = (el.innerText || '').trim();
+        if (t.includes('筛选')) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 20 && r.width < 120 && r.y > 30 && r.y < 250)
+            return { x: r.x + r.width/2, y: r.y + r.height/2 };
+        }
+      }
+      return null;
+    })()
+  `);
+
+  if (filterPos) {
+    await human.mouseClick(wc, filterPos.x, filterPos.y);
+    await sleep(1500, 2500);
+
+    // 选择排序方式
+    const sortText = sortMode === 'likes' ? '最多点赞' : sortMode === 'newest' ? '最新发布' : '综合排序';
+    const sortPos = await wc.executeJavaScript(`
+      (function() {
+        for (const el of document.querySelectorAll('*')) {
+          const t = (el.innerText || '').trim();
+          if (t === '${sortText}') {
+            const r = el.getBoundingClientRect();
+            if (r.width > 10 && r.height > 10 && r.height < 60 && r.x > 800)
+              return { x: r.x + r.width/2, y: r.y + r.height/2 };
+          }
+        }
+        return null;
+      })()
+    `);
+
+    if (sortPos) {
+      await human.mouseClick(wc, sortPos.x, sortPos.y);
+      log(`    已选择排序: ${sortText}`);
+      await sleep(1500, 2500);
+    }
+
+    // 选择时间范围
+    const timeText = days <= 1 ? '一天内' : days <= 7 ? '一周内' : '半年内';
+    const timePos = await wc.executeJavaScript(`
+      (function() {
+        for (const el of document.querySelectorAll('*')) {
+          const t = (el.innerText || '').trim();
+          if (t === '${timeText}') {
+            const r = el.getBoundingClientRect();
+            if (r.width > 10 && r.height > 10 && r.height < 60 && r.x > 800)
+              return { x: r.x + r.width/2, y: r.y + r.height/2 };
+          }
+        }
+        return null;
+      })()
+    `);
+
+    if (timePos) {
+      await human.mouseClick(wc, timePos.x, timePos.y);
+      log(`    已选择时间: ${timeText}`);
+      await sleep(1500, 2500);
+    }
+
+    // 关闭筛选面板
+    await human.mouseClick(wc, filterPos.x, filterPos.y);
+    await sleep(2000, 3000);
+  } else {
+    log('    未找到筛选按钮，跳过排序');
+  }
+}
 
 // ========== 页面操作 ==========
 
@@ -176,30 +209,24 @@ async function ensureLogin(view) {
     const body = await view.webContents.executeJavaScript('document.body.innerText.substring(0, 300)');
     if (body.includes('登录') && body.length < 100) {
       log('请在浏览器中登录抖音...');
-      const LOGIN_TIMEOUT = 120; // 最多等待 6 分钟（120 * 3秒）
+      const LOGIN_TIMEOUT = 120;
       for (let i = 0; i < LOGIN_TIMEOUT; i++) {
         await sleep(3000);
         if (!searchRunning) return;
         try {
           const b = await view.webContents.executeJavaScript('document.body.innerText.substring(0, 300)');
           if (!b.includes('登录') || b.length > 100) { log('登录成功'); return; }
-        } catch (e) {
-          log('检查登录状态异常，重试...');
-        }
+        } catch (e) { log('检查登录状态异常，重试...'); }
       }
       log('登录超时（6分钟），搜索任务终止');
       searchRunning = false;
     }
-  } catch (e) {
-    log(`检查登录状态失败: ${e.message}`);
-  }
+  } catch (e) { log(`检查登录状态失败: ${e.message}`); }
 }
 
-/** 通过地址栏导航（模拟真人：Ctrl+L → 输入 → 回车） */
 async function navigateToSearch(view, keyword) {
   const url = `https://www.douyin.com/search/${encodeURIComponent(keyword)}?type=video`;
   const wc = view.webContents;
-
   await human.keyPress(wc, 'l', ['ctrl']);
   await sleep(200, 400);
   await human.keyPress(wc, 'a', ['ctrl']);
@@ -211,7 +238,6 @@ async function navigateToSearch(view, keyword) {
   await human.keyPress(wc, 'Enter');
 }
 
-/** 模拟点击文本元素 */
 async function clickByText(view, text) {
   try {
     const pos = await view.webContents.executeJavaScript(`
@@ -231,7 +257,6 @@ async function clickByText(view, text) {
   } catch (e) {}
 }
 
-/** 模拟鼠标点击视频卡片 */
 async function clickVideoById(view, aid) {
   try {
     const pos = await view.webContents.executeJavaScript(`
@@ -253,7 +278,6 @@ async function clickVideoById(view, aid) {
   } catch (e) { return false; }
 }
 
-/** 扫描页面视频列表 */
 async function scanVideos(view) {
   try {
     return await view.webContents.executeJavaScript(`
@@ -273,7 +297,65 @@ async function scanVideos(view) {
   } catch (e) { return []; }
 }
 
-/** DOM 采集当前可见评论 */
+async function processVideo(view, aid, params, intentKw, garbageKw, cdp, onResult) {
+  try {
+    const clicked = await clickVideoById(view, aid);
+    if (!clicked) { log('    未定位到视频，跳过'); return 0; }
+    await sleep(3000, 5000);
+
+    const wc = view.webContents;
+    const videoInfo = { aweme_id: aid, desc: '', author: '', video_url: `https://www.douyin.com/video/${aid}` };
+
+    // 模拟观看
+    await human.mouseMove(wc, rand(300, 700), rand(200, 400));
+    await sleep(3000, 6000);
+
+    // 打开评论区
+    await human.keyPress(wc, 'x');
+    await sleep(3000, 4000);
+
+    // 滚动加载评论
+    for (let scroll = 0; scroll < 20; scroll++) {
+      if (!searchRunning) break;
+      await human.mouseScroll(wc, 'down', 1);
+      if (Math.random() < 0.3) await human.mouseMove(wc, rand(600, 900), rand(300, 600));
+      await sleep(1000, 2000);
+    }
+
+    // 采集评论（CDP + DOM）
+    const cdpComments = cdp ? cdp.getComments(aid) : [];
+    const domComments = await readDomComments(view);
+    const domOnly = domComments.filter(d => !cdpComments.some(c => c.text === d.text));
+    const allComments = [...cdpComments, ...domOnly];
+
+    if (cdp && cdp.currentVideo && cdp.currentVideo.aweme_id === aid) {
+      videoInfo.desc = cdp.currentVideo.desc || '';
+      videoInfo.author = cdp.currentVideo.author || '';
+    }
+
+    // 逐条匹配处理
+    let matched = 0;
+    for (const c of allComments) {
+      if (!searchRunning) break;
+      const result = pipeline.processComment(c, null, videoInfo, { intent: intentKw, garbage: garbageKw });
+      if (result) {
+        matched++;
+        if (onResult) onResult(result);
+      }
+    }
+
+    log(`    CDP: ${cdpComments.length}条, DOM: ${domComments.length}条, 命中: ${matched}条`);
+
+    await human.keyPress(wc, 'Escape');
+    await sleep(2000, 3000);
+    return matched;
+  } catch (e) {
+    log(`    处理视频异常: ${e.message}`);
+    try { await human.keyPress(view.webContents, 'Escape'); } catch (e2) {}
+    return 0;
+  }
+}
+
 async function readDomComments(view) {
   try {
     return await view.webContents.executeJavaScript(`
@@ -303,7 +385,9 @@ async function readDomComments(view) {
   } catch (e) { return []; }
 }
 
-// ========== 工具 ==========
+function stopSearch() { searchRunning = false; log('搜索已停止'); }
+function pauseSearch() { log('搜索已暂停（由监控任务触发）'); }
+function isRunning() { return searchRunning; }
 
 function log(msg) {
   logger.info(msg);
