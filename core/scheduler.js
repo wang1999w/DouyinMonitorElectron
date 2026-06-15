@@ -139,17 +139,7 @@ async function executeMonitorWithPriority(blogger, cfg) {
 
 async function navigateHome(view) {
   try {
-    const { keyPress, typeText } = require('./humanBehavior');
-    const wc = view.webContents;
-    await keyPress(wc, 'l', ['ctrl']);
-    await sleep(200, 400);
-    await keyPress(wc, 'a', ['ctrl']);
-    await sleep(50, 100);
-    await keyPress(wc, 'Backspace');
-    await sleep(100, 200);
-    await typeText(wc, 'https://www.douyin.com');
-    await sleep(200, 400);
-    await keyPress(wc, 'Enter');
+    await view.webContents.loadURL('https://www.douyin.com');
     await sleep(2000, 3000);
   } catch (e) {}
 }

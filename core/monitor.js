@@ -145,16 +145,7 @@ async function executeSingleBlogger(blogger, cfg, onLog) {
 
 /** 通过地址栏导航（键盘模拟） */
 async function navigateByUrl(view, url) {
-  const wc = view.webContents;
-  await human.keyPress(wc, 'l', ['ctrl']);
-  await sleep(200, 400);
-  await human.keyPress(wc, 'a', ['ctrl']);
-  await sleep(50, 100);
-  await human.keyPress(wc, 'Backspace');
-  await sleep(100, 200);
-  await human.typeText(wc, url);
-  await sleep(200, 400);
-  await human.keyPress(wc, 'Enter');
+  await view.webContents.loadURL(url);
 }
 
 async function scanBloggerVideos(view) {

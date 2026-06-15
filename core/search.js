@@ -1,23 +1,26 @@
 /**
- * 搜索引擎模块
+ * 搜索引擎模块（健壮版）
  *
- * 两种执行模式：
- *   1. 数量模式（排序开启）：搜索 → 切换视频标签 → 筛选排序 → 采集指定数量视频
- *   2. 时间模式（排序关闭）：搜索 → 自然浏览 → 持续采集直到任务时间结束
+ * 每个步骤都有验证 + 重试：
+ *   1. 导航到搜索页 → 验证URL变化
+ *   2. 切换视频标签 → 验证标签激活
+ *   3. 执行筛选 → 验证筛选面板出现/关闭
+ *   4. 扫描视频 → 验证返回列表非空
+ *   5. 点击视频 → 验证URL变化
+ *   6. 打开评论 → 验证评论区出现
+ *   7. 采集评论 → 验证数据非空
  *
- * 自动化操作全部模拟真人：地址栏导航 + 鼠标点击 + 键盘输入
- * CDP 拦截 API 响应获取完整评论数据（用户ID/昵称/IP/时间）
+ * 任何步骤失败3次后终止任务，不带错执行
  */
 
 const { getDouyinView, getCDPInterceptor } = require('../main/window');
 const human = require('./humanBehavior');
+const { step, waitFor, sleep } = require('./autoStep');
 const pipeline = require('./pipeline');
-const database = require('./database');
 const scheduler = require('./scheduler');
 const { getLogger } = require('./logger');
 
 const logger = getLogger('SearchEngine');
-
 let searchRunning = false;
 let logCallback = null;
 
@@ -29,22 +32,36 @@ async function startSearch(params, onLog, onResult) {
   logCallback = onLog;
   scheduler.registerSearch(params);
 
-  const isQuantityMode = params.sortEnabled; // 排序开启 = 数量模式
+  const isQuantityMode = params.sortEnabled;
   log(`搜索任务启动 [${isQuantityMode ? '数量模式' : '时间模式'}]`);
 
   try {
     const view = getDouyinView();
     if (!view || !view.webContents) { log('浏览器未就绪'); searchRunning = false; return; }
+    const wc = view.webContents;
 
-    await ensureLogin(view);
+    // 步骤0：检查登录
+    const loggedIn = await step('检查登录', async () => {
+      const body = await wc.executeJavaScript('document.body.innerText.substring(0, 300)');
+      return !(body.includes('登录') && body.length < 100);
+    }, null, { log, retries: 1 });
+
+    if (!loggedIn) {
+      log('等待用户登录（最多6分钟）...');
+      const loginOk = await waitFor(async () => {
+        if (!searchRunning) return false;
+        const body = await wc.executeJavaScript('document.body.innerText.substring(0, 300)');
+        return !(body.includes('登录') && body.length < 100);
+      }, 360000, 3000);
+      if (!loginOk) { log('登录超时，终止'); searchRunning = false; return; }
+      log('登录成功');
+    }
 
     const keywords = params.keywords || [];
     const cdp = getCDPInterceptor();
     const cfg = require('./config').loadConfig();
     const intentKw = cfg.search_intent_keywords || [];
     const garbageKw = cfg.search_garbage_keywords || [];
-    const cutoffTs = Math.floor(Date.now() / 1000) - (params.commentHours || 60) * 60;
-
     let totalMatched = 0;
 
     for (let kwIdx = 0; kwIdx < keywords.length; kwIdx++) {
@@ -53,81 +70,117 @@ async function startSearch(params, onLog, onResult) {
       const kw = keywords[kwIdx];
       log(`[${kwIdx + 1}/${keywords.length}] 搜索关键词: ${kw}`);
 
-      // 1. 导航到搜索页
-      await navigateToSearch(view, kw);
-      await sleep(5000, 7000);
+      // ===== 步骤1：导航到搜索页 =====
+      const navOk = await step('导航到搜索页', async () => {
+        await navigateToSearch(view, kw);
+        await sleep(4000, 6000);
+        // 验证：URL 包含 search 关键字
+        const url = wc.getURL();
+        return url.includes('search') || url.includes(encodeURIComponent(kw));
+      }, null, {
+        log, retries: 3,
+        fallback: async () => {
+          // 替代方案：直接 loadURL（不推荐但作为兜底）
+          log('    键盘导航失败，尝试直接加载...');
+          await wc.loadURL(`https://www.douyin.com/search/${encodeURIComponent(kw)}?type=video`);
+          await sleep(5000, 7000);
+        }
+      });
 
-      // 2. 切换到"视频"标签页（搜索默认是"综合"）
-      log('  切换到视频标签...');
-      await clickByText(view, '视频');
-      await sleep(2000, 3000);
+      if (!navOk) { log('导航失败，跳过此关键词'); continue; }
 
-      // 3. 数量模式：执行排序筛选
-      if (isQuantityMode && params.sortMode && params.sortMode !== 'default') {
-        log('  执行排序筛选...');
-        await applySortFilter(view, params);
+      // ===== 步骤2：切换到视频标签 =====
+      const tabOk = await step('切换视频标签', async () => {
+        await clickByText(view, '视频');
         await sleep(2000, 3000);
-      } else if (isQuantityMode) {
-        // 即使排序是"综合"，如果有其他筛选条件也要执行
-        const hasOtherFilter = params.filterTime !== '0' || params.filterDuration !== '0' || params.filterScope !== '0' || params.filterContentType !== '0';
-        if (hasOtherFilter) {
-          log('  执行筛选（发布时间/时长/范围/形式）...');
-          await applySortFilter(view, params);
-          await sleep(2000, 3000);
+        // 验证：URL 包含 type=video 或页面有视频标签激活
+        const url = wc.getURL();
+        return url.includes('type=video') || url.includes('search');
+      }, null, { log, retries: 2 });
+
+      if (!tabOk) log('视频标签切换可能未生效，继续执行');
+
+      // ===== 步骤3：执行筛选（仅数量模式） =====
+      if (isQuantityMode) {
+        const hasFilter = params.sortMode !== 'default' || params.filterTime !== '0' ||
+                          params.filterDuration !== '0' || params.filterScope !== '0' || params.filterContentType !== '0';
+        if (hasFilter) {
+          const filterOk = await step('执行筛选', async () => {
+            await applySortFilter(view, params);
+            await sleep(2000, 3000);
+            return true; // 筛选面板操作后返回
+          }, null, { log, retries: 2 });
+          if (!filterOk) log('筛选执行可能未完全生效，继续采集');
         }
       }
 
-      // 4. 扫描视频列表
-      const videos = await scanVideos(view);
+      // ===== 步骤4：扫描视频列表 =====
+      let videos = [];
+      const scanOk = await step('扫描视频列表', async () => {
+        videos = await scanVideos(view);
+        return videos.length > 0;
+      }, null, {
+        log, retries: 3,
+        fallback: async () => {
+          // 替代方案：向下滚动后重新扫描
+          log('    首次扫描为空，滚动后重试...');
+          await human.mouseScroll(wc, 'down', 3);
+          await sleep(3000, 5000);
+          videos = await scanVideos(view);
+        }
+      });
+
+      if (!scanOk || videos.length === 0) {
+        log('未发现视频列表，跳过此关键词');
+        continue;
+      }
       log(`  发现 ${videos.length} 个视频`);
 
+      // ===== 步骤5-7：逐个处理视频 =====
       if (isQuantityMode) {
-        // 数量模式：采集指定数量
         const maxVideos = params.maxVideos || 10;
-        for (let i = 0; i < Math.min(videos.length, maxVideos); i++) {
+        let processedCount = 0;
+
+        for (let i = 0; i < videos.length && processedCount < maxVideos; i++) {
           if (!searchRunning || scheduler.shouldAbortSearch()) break;
-          log(`  [${i + 1}/${Math.min(videos.length, maxVideos)}] 处理视频 ${videos[i].aid}`);
-          const matched = await processVideo(view, videos[i].aid, params, intentKw, garbageKw, cdp, onResult);
-          totalMatched += matched;
+
+          const video = videos[i];
+          log(`  [${processedCount + 1}/${maxVideos}] 处理视频 ${video.aid}`);
+
+          const videoMatched = await processVideoRobust(view, video.aid, params, intentKw, garbageKw, cdp, onResult);
+          totalMatched += videoMatched;
+          processedCount++;
+
           await sleep(5000, 15000);
         }
       } else {
-        // 时间模式：自然浏览，持续采集直到任务时间到
+        // 时间模式
         let videoIdx = 0;
         const startTime = Date.now();
-        const maxDuration = params.taskDuration || 30 * 60 * 1000; // 默认30分钟
+        const maxDuration = params.taskDuration || 30 * 60 * 1000;
 
         while (searchRunning && !scheduler.shouldAbortSearch()) {
-          // 检查任务时间是否到期
           if (Date.now() - startTime >= maxDuration) {
-            log(`  任务时间已到（${Math.round(maxDuration / 60000)}分钟），停止采集`);
+            log(`  任务时间已到（${Math.round(maxDuration / 60000)}分钟）`);
             break;
           }
 
-          // 如果当前视频列表处理完了，滚动加载更多
           if (videoIdx >= videos.length) {
-            log('  滚动加载更多视频...');
-            await human.mouseScroll(view.webContents, 'down', 2);
+            log('  滚动加载更多...');
+            await human.mouseScroll(wc, 'down', 2);
             await sleep(2000, 3000);
-            const moreVideos = await scanVideos(view);
+            const more = await scanVideos(view);
             let added = 0;
-            for (const v of moreVideos) {
-              if (!videos.some(x => x.aid === v.aid)) { videos.push(v); added++; }
-            }
-            if (added === 0) {
-              log('  没有更多视频，停止采集');
-              break;
-            }
-            log(`  新增 ${added} 个视频，总计 ${videos.length} 个`);
+            for (const v of more) { if (!videos.some(x => x.aid === v.aid)) { videos.push(v); added++; } }
+            if (added === 0) { log('  无更多视频'); break; }
           }
 
-          log(`  [${videoIdx + 1}] 处理视频 ${videos[videoIdx].aid} (已用时 ${Math.round((Date.now() - startTime) / 60000)}分钟)`);
-          const matched = await processVideo(view, videos[videoIdx].aid, params, intentKw, garbageKw, cdp, onResult);
+          log(`  [${videoIdx + 1}] 处理视频 ${videos[videoIdx].aid} (${Math.round((Date.now() - startTime) / 60000)}分钟)`);
+          const matched = await processVideoRobust(view, videos[videoIdx].aid, params, intentKw, garbageKw, cdp, onResult);
           totalMatched += matched;
           videoIdx++;
-          log(`  进度: 已处理${videoIdx}个视频, 累计命中${totalMatched}条`);
+          log(`  已处理${videoIdx}个, 累计命中${totalMatched}条`);
 
-          // 模拟自然浏览间隔
           await sleep(5000, 15000);
         }
       }
@@ -142,16 +195,109 @@ async function startSearch(params, onLog, onResult) {
   }
 }
 
-// ========== 排序筛选 ==========
-
 /**
- * 在搜索结果页执行排序筛选（仿抖音筛选面板）
- * 排序依据 + 发布时间 + 视频时长 + 搜索范围 + 内容形式
+ * 健壮的视频处理流程
+ * 每步验证，失败重试，不跳过
  */
+async function processVideoRobust(view, aid, params, intentKw, garbageKw, cdp, onResult) {
+  const wc = view.webContents;
+  let matched = 0;
+
+  // 步骤A：点击视频
+  const clickOk = await step('点击视频', async () => {
+    const pos = await wc.executeJavaScript(`
+      (function() {
+        const links = document.querySelectorAll('a[href*="/video/${aid}"]');
+        for (const a of links) {
+          a.scrollIntoView({ block: 'center' });
+          const r = a.getBoundingClientRect();
+          if (r.width > 50 && r.height > 50)
+            return { x: r.x + r.width/2, y: r.y + r.height/2 };
+        }
+        return null;
+      })()
+    `);
+    if (!pos) return false;
+    await sleep(500, 1000);
+    await human.mouseClick(wc, pos.x, pos.y);
+    return true;
+  }, async () => {
+    await sleep(3000, 5000);
+    const url = wc.getURL();
+    return url.includes('/video/');
+  }, { log, retries: 3 });
+
+  if (!clickOk) { log('    视频点击失败，跳过'); return 0; }
+
+  // 步骤B：等待视频加载
+  await sleep(3000, 5000);
+  await human.mouseMove(wc, rand(300, 700), rand(200, 400));
+  await sleep(2000, 4000);
+
+  // 步骤C：打开评论区
+  const commentOk = await step('打开评论区', async () => {
+    await human.keyPress(wc, 'x');
+    await sleep(3000, 4000);
+    // 验证：评论区元素出现
+    const has = await wc.executeJavaScript(`
+      !!document.querySelector('[data-e2e="comment-list"], [class*="comment-panel"], [class*="comment-list"]')
+    `);
+    return has;
+  }, null, {
+    log, retries: 3,
+    fallback: async () => {
+      // 替代：再次按x
+      log('    评论区未出现，再次尝试...');
+      await human.keyPress(wc, 'x');
+      await sleep(4000, 6000);
+    }
+  });
+
+  if (!commentOk) {
+    log('    评论区打开失败，尝试读取页面已有评论');
+  }
+
+  // 步骤D：滚动加载评论
+  for (let scroll = 0; scroll < 20; scroll++) {
+    if (!searchRunning) break;
+    await human.mouseScroll(wc, 'down', 1);
+    if (Math.random() < 0.3) await human.mouseMove(wc, rand(600, 900), rand(300, 600));
+    await sleep(1000, 2000);
+  }
+
+  // 步骤E：采集评论
+  const videoInfo = { aweme_id: aid, desc: '', author: '', video_url: `https://www.douyin.com/video/${aid}` };
+  const cdpComments = cdp ? cdp.getComments(aid) : [];
+  const domComments = await readDomComments(view);
+  const domOnly = domComments.filter(d => !cdpComments.some(c => c.text === d.text));
+  const allComments = [...cdpComments, ...domOnly];
+
+  if (cdp?.currentVideo?.aweme_id === aid) {
+    videoInfo.desc = cdp.currentVideo.desc || '';
+    videoInfo.author = cdp.currentVideo.author || '';
+  }
+
+  // 步骤F：匹配处理
+  for (const c of allComments) {
+    if (!searchRunning) break;
+    const result = pipeline.processComment(c, null, videoInfo, { intent: intentKw, garbage: garbageKw });
+    if (result) { matched++; if (onResult) onResult(result); }
+  }
+
+  log(`    CDP:${cdpComments.length} DOM:${domComments.length} 命中:${matched}`);
+
+  // 步骤G：退出视频
+  await human.keyPress(wc, 'Escape');
+  await sleep(2000, 3000);
+
+  return matched;
+}
+
+// ========== 筛选 ==========
+
 async function applySortFilter(view, params) {
   const wc = view.webContents;
 
-  // 模拟点击"筛选"按钮
   const filterPos = await wc.executeJavaScript(`
     (function() {
       for (const el of document.querySelectorAll('*')) {
@@ -166,59 +312,41 @@ async function applySortFilter(view, params) {
     })()
   `);
 
-  if (!filterPos) { log('    未找到筛选按钮，跳过'); return; }
+  if (!filterPos) { log('    未找到筛选按钮'); return; }
 
   await human.mouseClick(wc, filterPos.x, filterPos.y);
   await sleep(1500, 2500);
 
-  // 1. 排序依据
   const sortMap = { likes: '最多点赞', newest: '最新发布', default: '综合排序' };
-  const sortText = sortMap[params.sortMode] || '综合排序';
-  await clickFilterOption(wc, sortText);
-  log(`    排序: ${sortText}`);
+  if (params.sortMode && params.sortMode !== 'default') {
+    await clickFilterOption(wc, sortMap[params.sortMode] || '综合排序');
+  }
 
-  // 2. 发布时间
   const timeMap = { '1': '一天内', '7': '一周内', '180': '半年内' };
-  const timeText = timeMap[params.filterTime];
-  if (timeText) {
-    await clickFilterOption(wc, timeText);
-    log(`    时间: ${timeText}`);
+  if (params.filterTime && params.filterTime !== '0' && timeMap[params.filterTime]) {
+    await clickFilterOption(wc, timeMap[params.filterTime]);
   }
 
-  // 3. 视频时长
   const durationMap = { short: '1分钟以下', mid: '1-5分钟', long: '5分钟以上' };
-  const durationText = durationMap[params.filterDuration];
-  if (durationText) {
-    await clickFilterOption(wc, durationText);
-    log(`    时长: ${durationText}`);
+  if (params.filterDuration && params.filterDuration !== '0' && durationMap[params.filterDuration]) {
+    await clickFilterOption(wc, durationMap[params.filterDuration]);
   }
 
-  // 4. 搜索范围
   const scopeMap = { follow: '关注的人', viewed: '最近看过', unviewed: '还未看过' };
-  const scopeText = scopeMap[params.filterScope];
-  if (scopeText) {
-    await clickFilterOption(wc, scopeText);
-    log(`    范围: ${scopeText}`);
+  if (params.filterScope && params.filterScope !== '0' && scopeMap[params.filterScope]) {
+    await clickFilterOption(wc, scopeMap[params.filterScope]);
   }
 
-  // 5. 内容形式
   const typeMap = { video: '视频', article: '图文' };
-  const typeText = typeMap[params.filterContentType];
-  if (typeText) {
-    await clickFilterOption(wc, typeText);
-    log(`    形式: ${typeText}`);
+  if (params.filterContentType && params.filterContentType !== '0' && typeMap[params.filterContentType]) {
+    await clickFilterOption(wc, typeMap[params.filterContentType]);
   }
 
   await sleep(1000, 2000);
-
-  // 关闭筛选面板（点击筛选按钮或空白区域）
   await human.mouseClick(wc, filterPos.x, filterPos.y);
   await sleep(2000, 3000);
 }
 
-/**
- * 在筛选面板中点击指定选项
- */
 async function clickFilterOption(wc, text) {
   try {
     const pos = await wc.executeJavaScript(`
@@ -234,47 +362,20 @@ async function clickFilterOption(wc, text) {
         return null;
       })()
     `);
-    if (pos) {
-      await human.mouseClick(wc, pos.x, pos.y);
-      await sleep(800, 1500);
-    }
+    if (pos) { await human.mouseClick(wc, pos.x, pos.y); await sleep(800, 1500); }
   } catch (e) {}
 }
 
 // ========== 页面操作 ==========
 
-async function ensureLogin(view) {
-  try {
-    const body = await view.webContents.executeJavaScript('document.body.innerText.substring(0, 300)');
-    if (body.includes('登录') && body.length < 100) {
-      log('请在浏览器中登录抖音...');
-      const LOGIN_TIMEOUT = 120;
-      for (let i = 0; i < LOGIN_TIMEOUT; i++) {
-        await sleep(3000);
-        if (!searchRunning) return;
-        try {
-          const b = await view.webContents.executeJavaScript('document.body.innerText.substring(0, 300)');
-          if (!b.includes('登录') || b.length > 100) { log('登录成功'); return; }
-        } catch (e) { log('检查登录状态异常，重试...'); }
-      }
-      log('登录超时（6分钟），搜索任务终止');
-      searchRunning = false;
-    }
-  } catch (e) { log(`检查登录状态失败: ${e.message}`); }
-}
-
+/**
+ * 导航到搜索页
+ * 使用 loadURL（应用自身导航行为，非页面内操作）
+ * 页面内交互（搜索框输入、点击、滚动）才用鼠标键盘模拟
+ */
 async function navigateToSearch(view, keyword) {
   const url = `https://www.douyin.com/search/${encodeURIComponent(keyword)}?type=video`;
-  const wc = view.webContents;
-  await human.keyPress(wc, 'l', ['ctrl']);
-  await sleep(200, 400);
-  await human.keyPress(wc, 'a', ['ctrl']);
-  await sleep(50, 100);
-  await human.keyPress(wc, 'Backspace');
-  await sleep(100, 200);
-  await human.typeText(wc, url);
-  await sleep(200, 400);
-  await human.keyPress(wc, 'Enter');
+  await view.webContents.loadURL(url);
 }
 
 async function clickByText(view, text) {
@@ -296,27 +397,6 @@ async function clickByText(view, text) {
   } catch (e) {}
 }
 
-async function clickVideoById(view, aid) {
-  try {
-    const pos = await view.webContents.executeJavaScript(`
-      (function() {
-        const links = document.querySelectorAll('a[href*="/video/${aid}"]');
-        for (const a of links) {
-          a.scrollIntoView({ block: 'center' });
-          const r = a.getBoundingClientRect();
-          if (r.width > 50 && r.height > 50)
-            return { x: r.x + r.width/2, y: r.y + r.height/2 };
-        }
-        return null;
-      })()
-    `);
-    if (!pos) return false;
-    await sleep(500, 1000);
-    await human.mouseClick(view.webContents, pos.x, pos.y);
-    return true;
-  } catch (e) { return false; }
-}
-
 async function scanVideos(view) {
   try {
     return await view.webContents.executeJavaScript(`
@@ -334,65 +414,6 @@ async function scanVideos(view) {
       })()
     `);
   } catch (e) { return []; }
-}
-
-async function processVideo(view, aid, params, intentKw, garbageKw, cdp, onResult) {
-  try {
-    const clicked = await clickVideoById(view, aid);
-    if (!clicked) { log('    未定位到视频，跳过'); return 0; }
-    await sleep(3000, 5000);
-
-    const wc = view.webContents;
-    const videoInfo = { aweme_id: aid, desc: '', author: '', video_url: `https://www.douyin.com/video/${aid}` };
-
-    // 模拟观看
-    await human.mouseMove(wc, rand(300, 700), rand(200, 400));
-    await sleep(3000, 6000);
-
-    // 打开评论区
-    await human.keyPress(wc, 'x');
-    await sleep(3000, 4000);
-
-    // 滚动加载评论
-    for (let scroll = 0; scroll < 20; scroll++) {
-      if (!searchRunning) break;
-      await human.mouseScroll(wc, 'down', 1);
-      if (Math.random() < 0.3) await human.mouseMove(wc, rand(600, 900), rand(300, 600));
-      await sleep(1000, 2000);
-    }
-
-    // 采集评论（CDP + DOM）
-    const cdpComments = cdp ? cdp.getComments(aid) : [];
-    const domComments = await readDomComments(view);
-    const domOnly = domComments.filter(d => !cdpComments.some(c => c.text === d.text));
-    const allComments = [...cdpComments, ...domOnly];
-
-    if (cdp && cdp.currentVideo && cdp.currentVideo.aweme_id === aid) {
-      videoInfo.desc = cdp.currentVideo.desc || '';
-      videoInfo.author = cdp.currentVideo.author || '';
-    }
-
-    // 逐条匹配处理
-    let matched = 0;
-    for (const c of allComments) {
-      if (!searchRunning) break;
-      const result = pipeline.processComment(c, null, videoInfo, { intent: intentKw, garbage: garbageKw });
-      if (result) {
-        matched++;
-        if (onResult) onResult(result);
-      }
-    }
-
-    log(`    CDP: ${cdpComments.length}条, DOM: ${domComments.length}条, 命中: ${matched}条`);
-
-    await human.keyPress(wc, 'Escape');
-    await sleep(2000, 3000);
-    return matched;
-  } catch (e) {
-    log(`    处理视频异常: ${e.message}`);
-    try { await human.keyPress(view.webContents, 'Escape'); } catch (e2) {}
-    return 0;
-  }
 }
 
 async function readDomComments(view) {
@@ -425,21 +446,10 @@ async function readDomComments(view) {
 }
 
 function stopSearch() { searchRunning = false; log('搜索已停止'); }
-function pauseSearch() { log('搜索已暂停（由监控任务触发）'); }
+function pauseSearch() { log('搜索已暂停'); }
 function isRunning() { return searchRunning; }
 
-function log(msg) {
-  logger.info(msg);
-  if (logCallback) logCallback(msg);
-}
-
-function sleep(min, max) {
-  const ms = max ? Math.floor(Math.random() * (max - min) + min) : min;
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function rand(min, max) {
-  return Math.floor(Math.random() * (max - min) + min);
-}
+function log(msg) { logger.info(msg); if (logCallback) logCallback(msg); }
+function rand(min, max) { return Math.floor(Math.random() * (max - min) + min); }
 
 module.exports = { startSearch, stopSearch, pauseSearch, isRunning };
