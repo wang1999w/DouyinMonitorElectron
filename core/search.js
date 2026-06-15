@@ -96,22 +96,81 @@ async function startSearch(params, onLog, onResult, onProgress) {
 
       log(`[${kwIdx + 1}/${keywords.length}] 搜索关键词: ${kw}`);
 
-      // === 步骤3：导航到搜索页（loadURL，稳定可靠） ===
-      const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(kw)}?type=video`;
-      log(`  导航到搜索页...`);
-      await wc.loadURL(searchUrl);
+      // === 步骤3：搜索操作（全部模拟用户行为） ===
+      // 先关闭可能打开的下拉菜单
+      await human.mouseClick(wc, rand(600, 800), rand(400, 600));
+      await dom.sleep(500, 800);
+
+      // 找搜索框
+      const si = await dom.findSearchInput(view);
+      if (!si) {
+        log('  ❌ 搜索框未找到，尝试点击搜索区域...');
+        const fallbackPos = await execJS(wc, `(function(){
+          for (const el of document.querySelectorAll('div, section')) {
+            const r = el.getBoundingClientRect();
+            if (r.y < 60 && r.height > 30 && r.height < 80 && r.x < 400 && r.width > 200)
+              return { x: r.x + r.width/2, y: r.y + r.height/2 };
+          }
+          return null;
+        })()`);
+        if (fallbackPos) {
+          await human.mouseClick(wc, fallbackPos.x, fallbackPos.y);
+          await dom.sleep(1000, 1500);
+        }
+      }
+
+      // 重新找搜索框
+      const si2 = await dom.findSearchInput(view);
+      if (!si2) { log('  ❌ 搜索框仍然未找到，跳过'); continue; }
+
+      log(`  搜索框: (${Math.round(si2.x)},${Math.round(si2.y)}) [${si2.strategy}]`);
+
+      // 点击搜索框
+      await human.mouseClick(wc, si2.x, si2.y + 8);
+      await dom.sleep(400, 600);
+
+      // 输入关键词
+      await execJS(wc, `(function(){
+        const e = document.querySelector('[data-e2e="searchbar-input"], input[placeholder*="搜索"]');
+        if (!e) return false;
+        e.focus();
+        const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+        setter.call(e, '${kw.replace(/'/g, "\\'")}');
+        e.dispatchEvent(new Event('input', { bubbles: true }));
+        e.dispatchEvent(new Event('change', { bubbles: true }));
+        return true;
+      })()`);
+      await dom.sleep(500, 800);
+
+      const val = await execJS(wc, `document.querySelector('[data-e2e="searchbar-input"], input[placeholder*="搜索"]')?.value || ''`);
+      log(`  输入验证: "${val}"`);
+
+      // 点击搜索按钮
+      const btn = await dom.findSearchButton(view);
+      if (btn) {
+        await human.mouseClick(wc, btn.x, btn.y);
+        log(`  ✓ 已点击搜索按钮 [${btn.strategy}]`);
+      } else {
+        log('  搜索按钮未找到，按回车');
+        await human.keyPress(wc, 'Enter');
+      }
+
       await dom.sleep(5000, 7000);
 
-      // 验证：只读 URL，不重新加载
+      // 验证：只读当前 URL，不重新加载
       const url = await execJS(wc, 'location.href') || '';
-      log(`  当前URL: ${url.substring(0, 60)}`);
-      if (!url.includes('search')) {
-        log('  ❌ 未到搜索页，跳过');
-        continue;
-      }
+      const title = await execJS(wc, 'document.title') || '';
+      const isSearch = url.includes('search') || title.includes('搜索');
+      log(`  验证: URL=${url.substring(0, 60)}`);
+      log(`  验证: ${isSearch ? '✓ 已到搜索页' : '✗ 未到搜索页'}`);
 
       // 检查验证码
       await checkCaptchaLoop(view, task);
+
+      if (!isSearch) {
+        log('  ❌ 搜索未跳转到结果页，跳过');
+        continue;
+      }
 
       // === 步骤4：切换视频标签 ===
       log('  切换到视频标签...');
