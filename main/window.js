@@ -13,6 +13,9 @@ let douyinView = null;
 /** 抖音网页 URL */
 const DOUYIN_URL = 'https://www.douyin.com';
 
+/** 需要拦截的外部协议 */
+const BLOCKED_PROTOCOLS = ['bytedance:', 'sslocal:', 'snssdk:', 'aweme:'];
+
 /**
  * 创建主窗口（右栏 UI 面板）
  * @returns {BrowserWindow} 主窗口实例
@@ -32,6 +35,14 @@ function createMainWindow() {
   });
 
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+
+  // 拦截主窗口的新窗口请求
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isBlockedUrl(url)) {
+      return { action: 'deny' };
+    }
+    return { action: 'allow' };
+  });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -67,11 +78,48 @@ function createDouyinView() {
 
   douyinView.webContents.on('did-finish-load', () => {
     injectAntiDetection(douyinView);
+    injectNavigationBlocker(douyinView);
   });
 
   mainWindow.on('resize', () => {
     updateDouyinViewBounds();
   });
+}
+
+/**
+ * 注入导航拦截脚本
+ * 在渲染进程内拦截 bytedance:// 等协议的 window.open 调用
+ * @param {BrowserView} view - 目标 BrowserView
+ */
+function injectNavigationBlocker(view) {
+  if (!view || !view.webContents) return;
+
+  const script = `
+    (function() {
+      const origOpen = window.open;
+      window.open = function(url, ...args) {
+        if (url && (url.startsWith('bytedance:') || url.startsWith('sslocal:') ||
+            url.startsWith('snssdk:') || url.startsWith('aweme:'))) {
+          return null;
+        }
+        return origOpen.call(window, url, ...args);
+      };
+
+      document.addEventListener('click', (e) => {
+        const link = e.target.closest('a[href]');
+        if (link) {
+          const href = link.getAttribute('href') || '';
+          if (href.startsWith('bytedance:') || href.startsWith('sslocal:') ||
+              href.startsWith('snssdk:') || href.startsWith('aweme:')) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }
+      }, true);
+    })();
+  `;
+
+  view.webContents.executeJavaScript(script).catch(() => {});
 }
 
 /**
@@ -118,6 +166,16 @@ function injectAntiDetection(view) {
   `;
 
   view.webContents.executeJavaScript(script).catch(() => {});
+}
+
+/**
+ * 判断 URL 是否为被拦截的外部协议
+ * @param {string} url - 目标 URL
+ * @returns {boolean}
+ */
+function isBlockedUrl(url) {
+  if (!url) return false;
+  return BLOCKED_PROTOCOLS.some(p => url.toLowerCase().startsWith(p));
 }
 
 /**

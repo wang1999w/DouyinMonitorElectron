@@ -1,110 +1,172 @@
 /**
  * 博主监控面板
  * 负责：博主列表管理、监控启停控制、监控结果显示
+ * 使用 HTML 模态框替代 prompt() 实现博主添加
  */
 
 (function () {
   let selectedBloggerIdx = -1;
+  let currentBloggers = [];
 
-  /**
-   * 初始化监控面板事件
-   */
   function initMonitor() {
-    document.getElementById('btn-monitor-add').addEventListener('click', addBlogger);
+    document.getElementById('btn-monitor-add').addEventListener('click', showAddBloggerModal);
     document.getElementById('btn-monitor-del').addEventListener('click', delBlogger);
     document.getElementById('btn-monitor-start').addEventListener('click', startMonitor);
     document.getElementById('btn-monitor-stop').addEventListener('click', stopMonitor);
     document.getElementById('btn-save-monitor-kw').addEventListener('click', saveMonitorKeywords);
 
-    // 监听监控日志和结果
-    window.electronAPI.onMonitorLog((msg) => {
-      updateMonitorStatus(msg);
-    });
-
-    window.electronAPI.onMonitorResult((result) => {
-      addMonitorResult(result);
-    });
+    window.electronAPI.onMonitorLog((msg) => updateMonitorStatus(msg));
+    window.electronAPI.onMonitorResult((result) => addMonitorResult(result));
 
     loadBloggerList();
   }
 
-  /**
-   * 加载博主列表
-   */
   async function loadBloggerList() {
     try {
       const cfg = await window.electronAPI.getConfig();
-      const bloggers = cfg.monitor_bloggers || [];
-      renderBloggerList(bloggers);
+      currentBloggers = cfg.monitor_bloggers || [];
+      renderBloggerList();
     } catch (e) {}
   }
 
-  /**
-   * 渲染博主列表
-   * @param {Array} bloggers - 博主配置数组
-   */
-  function renderBloggerList(bloggers) {
+  function renderBloggerList() {
     const container = document.getElementById('blogger-list');
     container.innerHTML = '';
 
-    bloggers.forEach((b, i) => {
+    if (currentBloggers.length === 0) {
+      container.innerHTML = '<div style="padding:8px;color:#999;font-size:12px;">暂无博主，点击"添加博主"开始</div>';
+      return;
+    }
+
+    currentBloggers.forEach((b, i) => {
       const item = document.createElement('div');
       item.className = 'blogger-item' + (i === selectedBloggerIdx ? ' selected' : '');
+      const uid = (b.sec_uid || '').substring(0, 12);
+      const times = (b.time_ranges || []).join(', ') || '全天';
       item.innerHTML = `
-        <span>${escapeHtml(b.nickname || '未命名')} (${escapeHtml((b.sec_uid || '').substring(0, 10))}...)</span>
-        <span>${b.status === 1 ? '启用' : '暂停'}</span>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;">${escapeHtml(b.nickname || '未命名')}</div>
+          <div style="font-size:10px;color:#999;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(uid)}...</div>
+          <div style="font-size:10px;color:#888;">时段: ${escapeHtml(times)}</div>
+        </div>
+        <span style="font-size:11px;color:${b.status === 1 ? '#34a853' : '#999'};">${b.status === 1 ? '启用' : '暂停'}</span>
       `;
       item.addEventListener('click', () => {
         selectedBloggerIdx = i;
-        renderBloggerList(bloggers);
+        renderBloggerList();
       });
       container.appendChild(item);
     });
   }
 
   /**
-   * 弹窗添加博主
+   * 显示添加博主模态框
    */
-  async function addBlogger() {
-    const nickname = prompt('博主昵称：');
-    if (nickname === null) return;
-
-    const sec_uid = prompt('博主 sec_uid（从主页链接 user/ 后复制）：');
-    if (!sec_uid) {
-      alert('请填写 sec_uid');
-      return;
+  function showAddBloggerModal() {
+    let modal = document.getElementById('blogger-modal');
+    if (!modal) {
+      modal = createBloggerModal();
+      document.body.appendChild(modal);
     }
-
-    const timeRangesStr = prompt('监控时段（每行一个，如 09:00-09:40）：');
-    if (!timeRangesStr) {
-      alert('请至少填写一个监控时段');
-      return;
-    }
-
-    const timeRanges = timeRangesStr.split('\n').map(s => s.trim()).filter(Boolean);
-
-    const blogger = {
-      sec_uid,
-      nickname: nickname || '未命名',
-      time_ranges: timeRanges,
-      date_mode: 'recent_days',
-      date_value: 7,
-      status: 1
-    };
-
-    await window.electronAPI.addBlogger(blogger);
-    loadBloggerList();
+    document.getElementById('bm-nickname').value = '';
+    document.getElementById('bm-secuid').value = '';
+    document.getElementById('bm-times').value = '09:00-12:00\n14:00-18:00';
+    document.getElementById('bm-days').value = '7';
+    modal.style.display = 'flex';
   }
 
   /**
-   * 删除选中的博主
+   * 创建博主添加/编辑模态框 DOM
    */
+  function createBloggerModal() {
+    const modal = document.createElement('div');
+    modal.id = 'blogger-modal';
+    modal.style.cssText = 'display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:9999;justify-content:center;align-items:center;';
+
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:8px;padding:20px;width:420px;max-height:80vh;overflow-y:auto;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+        <h3 style="margin:0 0 16px;font-size:15px;color:#333;">添加监控博主</h3>
+
+        <div style="margin-bottom:12px;">
+          <label style="display:block;font-size:12px;color:#666;margin-bottom:4px;">博主昵称</label>
+          <input type="text" id="bm-nickname" placeholder="如：张三" style="width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;box-sizing:border-box;">
+        </div>
+
+        <div style="margin-bottom:12px;">
+          <label style="display:block;font-size:12px;color:#666;margin-bottom:4px;">博主 sec_uid <span style="color:#999;">（从主页链接 user/ 后复制）</span></label>
+          <input type="text" id="bm-secuid" placeholder="MS4wLjABAAAA..." style="width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;box-sizing:border-box;">
+        </div>
+
+        <div style="margin-bottom:12px;">
+          <label style="display:block;font-size:12px;color:#666;margin-bottom:4px;">监控时段 <span style="color:#999;">（每行一个，如 09:00-09:40）</span></label>
+          <textarea id="bm-times" rows="4" style="width:100%;padding:7px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;box-sizing:border-box;font-family:monospace;resize:vertical;">09:00-12:00
+14:00-18:00</textarea>
+        </div>
+
+        <div style="margin-bottom:16px;">
+          <label style="display:block;font-size:12px;color:#666;margin-bottom:4px;">作品日期筛选</label>
+          <select id="bm-days" style="padding:6px 10px;border:1px solid #ddd;border-radius:4px;font-size:13px;">
+            <option value="1">1天内</option>
+            <option value="7" selected>7天内</option>
+          </select>
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button id="bm-cancel" style="padding:7px 16px;border:1px solid #ddd;background:#fff;border-radius:4px;cursor:pointer;font-size:13px;">取消</button>
+          <button id="bm-save" style="padding:7px 16px;border:none;background:#1a73e8;color:#fff;border-radius:4px;cursor:pointer;font-size:13px;">保存</button>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(modal);
+
+    modal.querySelector('#bm-cancel').addEventListener('click', () => {
+      modal.style.display = 'none';
+    });
+
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) modal.style.display = 'none';
+    });
+
+    modal.querySelector('#bm-save').addEventListener('click', async () => {
+      const nickname = document.getElementById('bm-nickname').value.trim();
+      const secUid = document.getElementById('bm-secuid').value.trim();
+      const timesStr = document.getElementById('bm-times').value.trim();
+      const days = parseInt(document.getElementById('bm-days').value) || 7;
+
+      if (!secUid) {
+        alert('请填写博主 sec_uid');
+        return;
+      }
+      if (!timesStr) {
+        alert('请至少填写一个监控时段');
+        return;
+      }
+
+      const timeRanges = timesStr.split('\n').map(s => s.trim()).filter(Boolean);
+
+      const blogger = {
+        sec_uid: secUid,
+        nickname: nickname || '未命名',
+        time_ranges: timeRanges,
+        date_mode: 'recent_days',
+        date_value: days,
+        status: 1
+      };
+
+      await window.electronAPI.addBlogger(blogger);
+      modal.style.display = 'none';
+      loadBloggerList();
+    });
+
+    return modal;
+  }
+
   async function delBlogger() {
     if (selectedBloggerIdx < 0) {
       alert('请先选择一个博主');
       return;
     }
-
     if (!confirm('确定删除选中的博主吗？')) return;
 
     await window.electronAPI.delBlogger(selectedBloggerIdx);
@@ -112,31 +174,21 @@
     loadBloggerList();
   }
 
-  /**
-   * 启动监控
-   */
   async function startMonitor() {
     const cfg = await window.electronAPI.getConfig();
     if (!cfg.monitor_bloggers || cfg.monitor_bloggers.length === 0) {
       alert('请先添加监控博主');
       return;
     }
-
     setMonitorRunning(true);
     await window.electronAPI.startMonitor();
   }
 
-  /**
-   * 停止监控
-   */
   async function stopMonitor() {
     await window.electronAPI.stopMonitor();
     setMonitorRunning(false);
   }
 
-  /**
-   * 保存监控关键词
-   */
   async function saveMonitorKeywords() {
     const cfg = await window.electronAPI.getConfig();
     cfg.monitor_intent_keywords = getTextarea('monitor-intent-kw');
@@ -145,68 +197,39 @@
     alert('监控关键词已保存');
   }
 
-  /**
-   * 更新监控运行状态
-   * @param {boolean} running - 是否运行中
-   */
   function setMonitorRunning(running) {
     document.getElementById('btn-monitor-start').disabled = running;
     document.getElementById('btn-monitor-stop').disabled = !running;
   }
 
-  /**
-   * 更新监控状态文本
-   * @param {string} msg - 状态消息
-   */
   function updateMonitorStatus(msg) {
-    if (msg.includes('已停止')) {
-      setMonitorRunning(false);
-    }
+    if (msg.includes('已停止')) setMonitorRunning(false);
   }
 
-  /**
-   * 添加监控结果到列表
-   * @param {Object} result - 意向评论数据
-   */
   function addMonitorResult(result) {
     const container = document.getElementById('monitor-results');
     const item = document.createElement('div');
     item.className = 'result-item';
-
     const score = result.score || 0;
     const scoreClass = score >= 10 ? 'score-high' : score >= 5 ? 'score-mid' : 'score-low';
-
     item.innerHTML = `
       <div class="ri-header">
         <span class="ri-nick">${escapeHtml(result.nickname || '')}</span>
         <span class="ri-score ${scoreClass}">${score}分</span>
       </div>
       <div class="ri-comment">${escapeHtml(result.comment_text || '')}</div>
-      <div class="ri-meta">
-        关键词: ${escapeHtml(result.matched_keywords || '')} |
-        博主: ${escapeHtml(result.video_author || '')}
-      </div>
+      <div class="ri-meta">关键词: ${escapeHtml(result.matched_keywords || '')} | 博主: ${escapeHtml(result.video_author || '')}</div>
     `;
-
     container.insertBefore(item, container.firstChild);
-
-    while (container.children.length > 200) {
-      container.removeChild(container.lastChild);
-    }
+    while (container.children.length > 200) container.removeChild(container.lastChild);
   }
 
-  /**
-   * HTML 转义防 XSS
-   */
   function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
   }
 
-  /**
-   * 从 textarea 获取关键词数组
-   */
   function getTextarea(id) {
     const el = document.getElementById(id);
     if (!el) return [];

@@ -19,6 +19,12 @@ const DEFAULT_CONFIG = {
   monitor_garbage_keywords: ['666', '关注', '互粉', '点赞', '好看'],
   request_delay: 3,
   monitor_bloggers: [],
+  search_schedule: {
+    enable: false,
+    interval: 30,
+    unit: 60,
+    hours: '08:00-22:00'
+  },
   email: {
     enable: false,
     smtp_server: 'smtp.qq.com',

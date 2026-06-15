@@ -87,6 +87,33 @@
             <button id="btn-search-pause" class="btn-secondary" disabled>暂停</button>
             <button id="btn-search-stop" class="btn-danger" disabled>停止</button>
           </div>
+
+          <!-- 定时任务设置 -->
+          <fieldset style="border:1px solid #e0e0e0;border-radius:4px;padding:8px;margin-top:8px;">
+            <legend style="font-size:12px;color:#1a73e8;padding:0 4px;">定时任务</legend>
+            <div class="ctrl-row">
+              <label><input type="checkbox" id="search-schedule-enable"> 启用定时搜索</label>
+            </div>
+            <div class="ctrl-row">
+              <label>间隔：</label>
+              <input type="number" id="search-schedule-interval" value="30" min="1" max="1440" style="width:50px">
+              <select id="search-schedule-unit">
+                <option value="60">分钟</option>
+                <option value="3600">小时</option>
+              </select>
+              <label>执行一次</label>
+            </div>
+            <div class="ctrl-row">
+              <label>执行时段：</label>
+              <input type="text" id="search-schedule-hours" value="08:00-22:00" placeholder="08:00-22:00" style="width:120px;">
+              <span style="font-size:10px;color:#999;">（空=全天）</span>
+            </div>
+            <div class="ctrl-row">
+              <button id="btn-search-schedule" class="btn-secondary">保存定时设置</button>
+              <span id="search-schedule-status" style="font-size:11px;color:#999;"></span>
+            </div>
+          </fieldset>
+
           <div id="search-status">就绪</div>
         </div>
         <div id="search-results"></div>
