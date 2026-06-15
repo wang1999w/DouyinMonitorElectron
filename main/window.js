@@ -80,9 +80,11 @@ function createDouyinView() {
   douyinView.webContents.on('did-finish-load', () => {
     injectAntiDetection(douyinView);
     injectNavigationBlocker(douyinView);
-    // 首次加载完成后启动 CDP 拦截器
+    // 启动 CDP 拦截器（防止重复 attach）
     if (!cdpInterceptor) {
       cdpInterceptor = new CDPInterceptor();
+    }
+    if (!douyinView.webContents.debugger.isAttached()) {
       cdpInterceptor.start(douyinView.webContents);
     }
   });

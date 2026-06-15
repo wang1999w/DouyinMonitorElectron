@@ -60,6 +60,10 @@ class CDPInterceptor {
    */
   start(webContents) {
     if (!webContents) return;
+    if (webContents.debugger.isAttached()) {
+      logger.warn('CDP 已连接，跳过重复 attach');
+      return;
+    }
 
     try {
       webContents.debugger.attach('1.3');
