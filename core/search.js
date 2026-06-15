@@ -22,6 +22,80 @@ let logCallback = null;
 
 function checkRunning() { return searchRunning; }
 
+/**
+ * 检测验证码弹窗
+ * 抖音验证码特征：包含"验证"文字 + 弹窗遮罩
+ */
+async function checkCaptcha(wc) {
+  try {
+    return await wc.executeJavaScript(`
+      (function() {
+        const text = document.body.innerText;
+        // 验证码关键词
+        if (text.includes('请完成下列验证') || text.includes('安全验证') || text.includes('人机验证')) return true;
+        // 滑块验证
+        if (text.includes('按住左边按钮拖动') || text.includes('拖动完成拼图')) return true;
+        // 验证码弹窗元素
+        if (document.querySelector('[class*="captcha"]') || document.querySelector('[class*="verify"]')) return true;
+        return false;
+      })()
+    `);
+  } catch (e) { return false; }
+}
+
+/**
+ * 等待验证码消失（用户手动处理）
+ * 每3秒检查一次，最多等5分钟
+ */
+async function waitForCaptchaSolved(wc) {
+  log('  ⚠️ 检测到验证码！请手动完成验证...');
+  notifyUser('检测到验证码，请在左侧页面手动完成验证，完成后会自动继续');
+
+  for (let i = 0; i < 100; i++) {
+    await sleep(3000);
+    if (!checkRunning()) return false;
+    const hasCaptcha = await checkCaptcha(wc);
+    if (!hasCaptcha) {
+      log('  ✅ 验证码已通过');
+      return true;
+    }
+  }
+  log('  验证码等待超时（5分钟）');
+  return false;
+}
+
+/**
+ * 通知用户（通过 IPC 发送到渲染进程）
+ */
+function notifyUser(msg) {
+  log(`  🔔 ${msg}`);
+  try {
+    const { getMainWindow } = require('../main/window');
+    const win = getMainWindow();
+    if (win && win.webContents) {
+      win.webContents.send('search-log', `🔔 ${msg}`);
+    }
+  } catch (e) {}
+}
+
+/**
+ * 搜索前检查是否需要登录
+ */
+async function ensureLogin(wc) {
+  const body = await wc.executeJavaScript('document.body.innerText.substring(0, 300)').catch(() => '');
+  if (body.includes('登录') && body.length < 100) {
+    log('请在浏览器中登录抖音...');
+    for (let i = 0; i < 120; i++) {
+      await sleep(3000);
+      if (!checkRunning()) return false;
+      const b = await wc.executeJavaScript('document.body.innerText.substring(0, 300)').catch(() => '');
+      if (!b.includes('登录') || b.length > 100) { log('登录成功'); return true; }
+    }
+    log('登录超时'); return false;
+  }
+  return true;
+}
+
 async function startSearch(params, onLog, onResult) {
   if (searchRunning) return;
   searchRunning = true;
@@ -38,15 +112,12 @@ async function startSearch(params, onLog, onResult) {
 
     // 检查登录
     if (!checkRunning()) return;
-    const body = await wc.executeJavaScript('document.body.innerText.substring(0, 300)').catch(() => '');
-    if (body.includes('登录') && body.length < 100) {
-      log('请在浏览器中登录抖音...');
-      for (let i = 0; i < 120; i++) {
-        await sleep(3000);
-        if (!checkRunning()) return;
-        const b = await wc.executeJavaScript('document.body.innerText.substring(0, 300)').catch(() => '');
-        if (!b.includes('登录') || b.length > 100) { log('登录成功'); break; }
-      }
+    const loginOk = await ensureLogin(wc);
+    if (!loginOk) { searchRunning = false; return; }
+
+    // 检查首页验证码
+    if (await checkCaptcha(wc)) {
+      if (!await waitForCaptchaSolved(wc)) { searchRunning = false; return; }
     }
 
     const keywords = params.keywords || [];
@@ -62,12 +133,18 @@ async function startSearch(params, onLog, onResult) {
       const kw = keywords[kwIdx];
       log(`[${kwIdx + 1}/${keywords.length}] 搜索关键词: ${kw}`);
 
-      // ===== 步骤1：点击搜索框 → 输入关键词 → 点击搜索 =====
+      // ===== 步骤1：输入关键词搜索 =====
       if (!checkRunning()) break;
       log('  输入搜索关键词...');
       const searchOk = await typeKeywordAndSearch(view, kw);
       if (!searchOk) { log('  搜索输入失败，跳过'); continue; }
       await sleep(5000, 7000);
+
+      // 搜索后检查验证码
+      if (await checkCaptcha(wc)) {
+        if (!await waitForCaptchaSolved(wc)) break;
+        await sleep(2000, 3000);
+      }
 
       // ===== 步骤2：点击"视频"标签 =====
       if (!checkRunning()) break;
@@ -302,6 +379,11 @@ async function clickFilterOption(wc, text) {
 async function processVideo(view, aid, params, intentKw, garbageKw, cdp, onResult) {
   if (!checkRunning()) return 0;
   const wc = view.webContents;
+
+  // 处理前检查验证码
+  if (await checkCaptcha(wc)) {
+    if (!await waitForCaptchaSolved(wc)) return 0;
+  }
 
   try {
     // 点击视频
