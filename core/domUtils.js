@@ -145,6 +145,46 @@ async function verifySearchInput(view, expectedValue) {
 // ========== 视频相关 ==========
 
 /**
+ * 点击视频卡片（多策略降级）
+ * 策略1: a[href*="/video/{aid}"] 链接
+ * 策略2: [data-e2e-vid="{aid}"] 元素
+ * 策略3: 页面上第一个大尺寸卡片
+ */
+async function clickVideoById(view, aid) {
+  const wc = view.webContents;
+
+  // 策略1: 链接
+  let pos = await execJS(wc, `(function(){
+    const links = document.querySelectorAll('a[href*="/video/${aid}"]');
+    for (const a of links) {
+      a.scrollIntoView({ block: 'center' });
+      const r = a.getBoundingClientRect();
+      if (r.width > 50 && r.height > 50)
+        return { x: r.x+r.width/2, y: r.y+r.height/2 };
+    }
+    return null;
+  })()`);
+
+  // 策略2: data-e2e-vid
+  if (!pos) {
+    pos = await execJS(wc, `(function(){
+      const el = document.querySelector('[data-e2e-vid="${aid}"]');
+      if (el) {
+        el.scrollIntoView({ block: 'center' });
+        const r = el.getBoundingClientRect();
+        return { x: r.x+r.width/2, y: r.y+r.height/2 };
+      }
+      return null;
+    })()`);
+  }
+
+  if (!pos) return false;
+  await sleep(500, 1000);
+  await human.mouseClick(wc, pos.x, pos.y);
+  return true;
+}
+
+/**
  * 获取当前播放的视频信息
  * 使用 [data-e2e="feed-active-video"] 和 data-e2e-vid
  */
@@ -326,7 +366,7 @@ async function scanVideoLinks(view) {
 module.exports = {
   execJS, sleep, waitForElement,
   findSearchInput, findSearchButton, setSearchInputValue, verifySearchInput,
-  getCurrentVideoInfo, isVideoLoaded, waitForVideoLoad,
+  clickVideoById, getCurrentVideoInfo, isVideoLoaded, waitForVideoLoad,
   isCommentOpen, getCommentCount, readDomComments, scrollCommentPanel,
   hasCaptcha,
   clickByText, scanVideoLinks

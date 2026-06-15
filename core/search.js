@@ -1,36 +1,43 @@
 /**
- * 搜索引擎模块（重构版 - 基于 laizan 项目学习）
- *
- * 核心改进：
- *   1. 搜索框多策略定位（data-e2e → placeholder → 位置）
- *   2. waitForSelector 替代固定 sleep
- *   3. 验证码用 .second-verify-panel 检测
- *   4. 键盘 ArrowDown 导航视频
- *   5. 每步带状态感知和诊断
- *   6. 进度回调驱动
+ * 执行搜索（稳定版）
+ * 导航用 loadURL（可靠），验证只读 URL（不重新加载）
  */
+async function executeSearch(view, keyword, task) {
+  const wc = view.webContents;
 
-const { getDouyinView, getCDPInterceptor } = require('../main/window');
-const human = require('./humanBehavior');
-const dom = require('./domUtils');
-const videoProcessor = require('./videoProcessor');
-const scheduler = require('./scheduler');
-const { getLogger } = require('./logger');
+  // 直接导航到搜索页（loadURL 比操作 DOM 更可靠）
+  const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(keyword)}?type=video`;
+  log(`  导航到: ${keyword}`);
+  try {
+    await wc.loadURL(searchUrl);
+  } catch (e) {
+    log(`  ❌ 导航失败: ${e.message}`);
+    return false;
+  }
 
-const logger = getLogger('SearchEngine');
+  // 等待页面加载
+  await dom.sleep(5000, 7000);
 
-let searchRunning = false;
-let searchPaused = false;
-let logCallback = null;
-let progressCallback = null;
-let currentTask = null;
+  // 验证：只读当前 URL，不重新加载
+  const currentUrl = await execJS(wc, 'location.href') || '';
+  const currentTitle = await execJS(wc, 'document.title') || '';
+  const isSearch = currentUrl.includes('search') || currentTitle.includes('搜索');
+  log(`  验证: URL=${currentUrl.substring(0, 60)}`);
+  log(`  验证: 标题=${currentTitle}`);
+  log(`  验证: ${isSearch ? '✓ 已到搜索页' : '✗ 未到搜索页'}`);
 
-function checkRunning() { return searchRunning; }
+  // 验证码检查
+  if (await dom.hasCaptcha(view)) {
+    log('  ⚠ 验证码，等待处理...');
+    notifyUser('验证码检测到，请手动完成');
+    for (let i = 0; i < 100; i++) {
+      await sleep(3000);
+      if (task.stopped) return false;
+      if (!(await dom.hasCaptcha(view))) { log('  ✓ 验证码已通过'); break; }
+    }
+  }
 
-function stopSearch() {
-  if (currentTask) currentTask.stopped = true;
-  searchPaused = false;
-  log('搜索已停止');
+  return isSearch;
 }
 
 function pauseSearch() {

@@ -27,26 +27,25 @@ async function processVideo(ctx) {
   const check = () => shouldContinue ? shouldContinue() : true;
 
   try {
-    // 步骤1：等待视频加载（.recommend-fake-video-img 消失）
-    report({ phase: 'load', awemeId: aid });
-    const loaded = await dom.waitForVideoLoad(view, 15000);
-    if (!loaded) {
-      log('    视频加载超时，尝试继续');
+    // 步骤1：点击视频卡片（从搜索结果列表打开）
+    report({ phase: 'click', awemeId: aid });
+    const clicked = await dom.clickVideoById(view, aid);
+    if (!clicked) {
+      result.skipped = 'video_not_found';
+      log('    视频未找到');
+      report({ phase: 'skip', awemeId: aid, reason: '视频未找到' });
+      return result;
     }
+
+    // 步骤2：等待视频加载
+    report({ phase: 'load', awemeId: aid });
+    await sleep(5000, 8000);
     if (!check()) return result;
 
-    // 步骤2：获取当前视频信息
-    const currentVid = await dom.getCurrentVideoInfo(view);
-    if (currentVid) {
-      log(`    当前视频: ${currentVid.vid}`);
-      // 从 CDP 缓存补充视频信息
-      if (cdp && cdp.currentVideo) {
-        videoInfo.desc = videoInfo.desc || cdp.currentVideo.desc || '';
-        videoInfo.author = videoInfo.author || cdp.currentVideo.author || '';
-      }
-    }
-
-    // 步骤3：检查评论数
+    // 步骤3：模拟观看
+    report({ phase: 'watch', awemeId: aid });
+    await human.mouseMove(wc, rand(300, 700), rand(200, 400));
+    await sleep(3000, 5000);
     report({ phase: 'checkComment', awemeId: aid });
     const commentCount = await dom.getCommentCount(view);
     if (commentCount === 0) {
