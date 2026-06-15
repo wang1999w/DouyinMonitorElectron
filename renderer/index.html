@@ -65,34 +65,69 @@
           <!-- 数量模式设置 -->
           <div id="mode-quantity-panel">
             <div class="ctrl-row">
-              <label>视频日期：</label>
-              <select id="search-days">
-                <option value="1">1天内</option>
-                <option value="7" selected>7天内</option>
-                <option value="30">30天内</option>
-              </select>
               <label>每词采集：</label>
               <input type="number" id="search-maxv" value="10" min="1" max="100" style="width:50px">
               <label>个视频</label>
-            </div>
-            <div class="ctrl-row">
-              <label>评论时间：</label>
-              <input type="number" id="search-ch" value="60" min="1" style="width:50px">
-              <select id="search-ch-unit">
-                <option value="60">分钟内</option>
-                <option value="3600">小时内</option>
-              </select>
-              <label>最大评论：</label>
+              <label style="margin-left:8px;">最大评论：</label>
               <input type="number" id="search-maxc" value="200" min="1" style="width:50px">
             </div>
-            <!-- 排序筛选 -->
-            <div class="ctrl-row" style="background:#f8f8f8;padding:6px 8px;border-radius:4px;">
-              <label><input type="checkbox" id="search-sort-enable" checked> 启用排序筛选</label>
-            </div>
-            <div id="search-sort-options" class="ctrl-row" style="padding:4px 8px;">
-              <label>排序：</label>
-              <label><input type="radio" name="search-sort" value="likes" checked> 最多点赞</label>
-              <label><input type="radio" name="search-sort" value="newest"> 最新发布</label>
+
+            <!-- 排序筛选面板（仿抖音） -->
+            <div id="search-sort-options" style="background:#f8f8f8;border-radius:6px;padding:10px;margin-bottom:8px;">
+              <div style="font-size:12px;font-weight:600;color:#333;margin-bottom:8px;">排序筛选</div>
+
+              <!-- 排序依据 -->
+              <div class="filter-row">
+                <span class="filter-label">排序依据</span>
+                <div class="filter-options">
+                  <label class="filter-chip active" data-group="sort"><input type="radio" name="search-sort" value="default" checked> 综合排序</label>
+                  <label class="filter-chip" data-group="sort"><input type="radio" name="search-sort" value="newest"> 最新发布</label>
+                  <label class="filter-chip" data-group="sort"><input type="radio" name="search-sort" value="likes"> 最多点赞</label>
+                </div>
+              </div>
+
+              <!-- 发布时间 -->
+              <div class="filter-row">
+                <span class="filter-label">发布时间</span>
+                <div class="filter-options">
+                  <label class="filter-chip active" data-group="time"><input type="radio" name="search-time" value="0" checked> 不限</label>
+                  <label class="filter-chip" data-group="time"><input type="radio" name="search-time" value="1"> 一天内</label>
+                  <label class="filter-chip" data-group="time"><input type="radio" name="search-time" value="7"> 一周内</label>
+                  <label class="filter-chip" data-group="time"><input type="radio" name="search-time" value="180"> 半年内</label>
+                </div>
+              </div>
+
+              <!-- 视频时长 -->
+              <div class="filter-row">
+                <span class="filter-label">视频时长</span>
+                <div class="filter-options">
+                  <label class="filter-chip active" data-group="duration"><input type="radio" name="search-duration-filter" value="0" checked> 不限</label>
+                  <label class="filter-chip" data-group="duration"><input type="radio" name="search-duration-filter" value="short"> 1分钟以下</label>
+                  <label class="filter-chip" data-group="duration"><input type="radio" name="search-duration-filter" value="mid"> 1-5分钟</label>
+                  <label class="filter-chip" data-group="duration"><input type="radio" name="search-duration-filter" value="long"> 5分钟以上</label>
+                </div>
+              </div>
+
+              <!-- 搜索范围 -->
+              <div class="filter-row">
+                <span class="filter-label">搜索范围</span>
+                <div class="filter-options">
+                  <label class="filter-chip active" data-group="scope"><input type="radio" name="search-scope" value="0" checked> 不限</label>
+                  <label class="filter-chip" data-group="scope"><input type="radio" name="search-scope" value="follow"> 关注的人</label>
+                  <label class="filter-chip" data-group="scope"><input type="radio" name="search-scope" value="viewed"> 最近看过</label>
+                  <label class="filter-chip" data-group="scope"><input type="radio" name="search-scope" value="unviewed"> 还未看过</label>
+                </div>
+              </div>
+
+              <!-- 内容形式 -->
+              <div class="filter-row">
+                <span class="filter-label">内容形式</span>
+                <div class="filter-options">
+                  <label class="filter-chip active" data-group="type"><input type="radio" name="search-content-type" value="0" checked> 不限</label>
+                  <label class="filter-chip" data-group="type"><input type="radio" name="search-content-type" value="video"> 视频</label>
+                  <label class="filter-chip" data-group="type"><input type="radio" name="search-content-type" value="article"> 图文</label>
+                </div>
+              </div>
             </div>
           </div>
 

@@ -64,9 +64,17 @@ async function startSearch(params, onLog, onResult) {
 
       // 3. 数量模式：执行排序筛选
       if (isQuantityMode && params.sortMode && params.sortMode !== 'default') {
-        log(`  执行排序筛选: ${params.sortMode}`);
-        await applySortFilter(view, params.sortMode, params.days);
+        log('  执行排序筛选...');
+        await applySortFilter(view, params);
         await sleep(2000, 3000);
+      } else if (isQuantityMode) {
+        // 即使排序是"综合"，如果有其他筛选条件也要执行
+        const hasOtherFilter = params.filterTime !== '0' || params.filterDuration !== '0' || params.filterScope !== '0' || params.filterContentType !== '0';
+        if (hasOtherFilter) {
+          log('  执行筛选（发布时间/时长/范围/形式）...');
+          await applySortFilter(view, params);
+          await sleep(2000, 3000);
+        }
       }
 
       // 4. 扫描视频列表
@@ -137,10 +145,10 @@ async function startSearch(params, onLog, onResult) {
 // ========== 排序筛选 ==========
 
 /**
- * 在搜索结果页执行排序筛选
- * 模拟点击"筛选"按钮 → 选择排序方式 → 选择时间范围
+ * 在搜索结果页执行排序筛选（仿抖音筛选面板）
+ * 排序依据 + 发布时间 + 视频时长 + 搜索范围 + 内容形式
  */
-async function applySortFilter(view, sortMode, days) {
+async function applySortFilter(view, params) {
   const wc = view.webContents;
 
   // 模拟点击"筛选"按钮
@@ -158,60 +166,79 @@ async function applySortFilter(view, sortMode, days) {
     })()
   `);
 
-  if (filterPos) {
-    await human.mouseClick(wc, filterPos.x, filterPos.y);
-    await sleep(1500, 2500);
+  if (!filterPos) { log('    未找到筛选按钮，跳过'); return; }
 
-    // 选择排序方式
-    const sortText = sortMode === 'likes' ? '最多点赞' : sortMode === 'newest' ? '最新发布' : '综合排序';
-    const sortPos = await wc.executeJavaScript(`
-      (function() {
-        for (const el of document.querySelectorAll('*')) {
-          const t = (el.innerText || '').trim();
-          if (t === '${sortText}') {
-            const r = el.getBoundingClientRect();
-            if (r.width > 10 && r.height > 10 && r.height < 60 && r.x > 800)
-              return { x: r.x + r.width/2, y: r.y + r.height/2 };
-          }
-        }
-        return null;
-      })()
-    `);
+  await human.mouseClick(wc, filterPos.x, filterPos.y);
+  await sleep(1500, 2500);
 
-    if (sortPos) {
-      await human.mouseClick(wc, sortPos.x, sortPos.y);
-      log(`    已选择排序: ${sortText}`);
-      await sleep(1500, 2500);
-    }
+  // 1. 排序依据
+  const sortMap = { likes: '最多点赞', newest: '最新发布', default: '综合排序' };
+  const sortText = sortMap[params.sortMode] || '综合排序';
+  await clickFilterOption(wc, sortText);
+  log(`    排序: ${sortText}`);
 
-    // 选择时间范围
-    const timeText = days <= 1 ? '一天内' : days <= 7 ? '一周内' : '半年内';
-    const timePos = await wc.executeJavaScript(`
-      (function() {
-        for (const el of document.querySelectorAll('*')) {
-          const t = (el.innerText || '').trim();
-          if (t === '${timeText}') {
-            const r = el.getBoundingClientRect();
-            if (r.width > 10 && r.height > 10 && r.height < 60 && r.x > 800)
-              return { x: r.x + r.width/2, y: r.y + r.height/2 };
-          }
-        }
-        return null;
-      })()
-    `);
-
-    if (timePos) {
-      await human.mouseClick(wc, timePos.x, timePos.y);
-      log(`    已选择时间: ${timeText}`);
-      await sleep(1500, 2500);
-    }
-
-    // 关闭筛选面板
-    await human.mouseClick(wc, filterPos.x, filterPos.y);
-    await sleep(2000, 3000);
-  } else {
-    log('    未找到筛选按钮，跳过排序');
+  // 2. 发布时间
+  const timeMap = { '1': '一天内', '7': '一周内', '180': '半年内' };
+  const timeText = timeMap[params.filterTime];
+  if (timeText) {
+    await clickFilterOption(wc, timeText);
+    log(`    时间: ${timeText}`);
   }
+
+  // 3. 视频时长
+  const durationMap = { short: '1分钟以下', mid: '1-5分钟', long: '5分钟以上' };
+  const durationText = durationMap[params.filterDuration];
+  if (durationText) {
+    await clickFilterOption(wc, durationText);
+    log(`    时长: ${durationText}`);
+  }
+
+  // 4. 搜索范围
+  const scopeMap = { follow: '关注的人', viewed: '最近看过', unviewed: '还未看过' };
+  const scopeText = scopeMap[params.filterScope];
+  if (scopeText) {
+    await clickFilterOption(wc, scopeText);
+    log(`    范围: ${scopeText}`);
+  }
+
+  // 5. 内容形式
+  const typeMap = { video: '视频', article: '图文' };
+  const typeText = typeMap[params.filterContentType];
+  if (typeText) {
+    await clickFilterOption(wc, typeText);
+    log(`    形式: ${typeText}`);
+  }
+
+  await sleep(1000, 2000);
+
+  // 关闭筛选面板（点击筛选按钮或空白区域）
+  await human.mouseClick(wc, filterPos.x, filterPos.y);
+  await sleep(2000, 3000);
+}
+
+/**
+ * 在筛选面板中点击指定选项
+ */
+async function clickFilterOption(wc, text) {
+  try {
+    const pos = await wc.executeJavaScript(`
+      (function() {
+        for (const el of document.querySelectorAll('*')) {
+          const t = (el.innerText || '').trim();
+          if (t === '${text}') {
+            const r = el.getBoundingClientRect();
+            if (r.width > 10 && r.height > 10 && r.height < 60 && r.x > 600)
+              return { x: r.x + r.width/2, y: r.y + r.height/2 };
+          }
+        }
+        return null;
+      })()
+    `);
+    if (pos) {
+      await human.mouseClick(wc, pos.x, pos.y);
+      await sleep(800, 1500);
+    }
+  } catch (e) {}
 }
 
 // ========== 页面操作 ==========

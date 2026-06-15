@@ -442,3 +442,40 @@ legend {
   border-color: #1a73e8;
   font-weight: 600;
 }
+
+/* 筛选选项卡片 */
+.filter-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 6px;
+  gap: 8px;
+}
+.filter-label {
+  font-size: 11px;
+  color: #999;
+  width: 60px;
+  flex-shrink: 0;
+}
+.filter-options {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.filter-chip {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 14px;
+  font-size: 11px;
+  cursor: pointer;
+  border: 1px solid #e0e0e0;
+  background: #fff;
+  color: #666;
+  transition: all 0.2s;
+}
+.filter-chip input { display: none; }
+.filter-chip:hover { border-color: #1a73e8; color: #1a73e8; }
+.filter-chip.active {
+  background: #1a73e8;
+  color: #fff;
+  border-color: #1a73e8;
+}

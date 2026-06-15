@@ -22,9 +22,14 @@
     document.getElementById('btn-search-stop').addEventListener('click', stopSearch);
     document.getElementById('btn-search-schedule').addEventListener('click', saveSchedule);
 
-    document.getElementById('search-sort-enable').addEventListener('change', (e) => {
-      document.getElementById('search-sort-options').style.opacity = e.target.checked ? '1' : '0.4';
-      document.querySelectorAll('input[name="search-sort"]').forEach(r => r.disabled = !e.target.checked);
+    // 筛选选项点击切换 active 状态
+    document.querySelectorAll('.filter-chip').forEach(chip => {
+      chip.addEventListener('click', (e) => {
+        const group = chip.dataset.group;
+        chip.closest('.filter-options').querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        chip.querySelector('input').checked = true;
+      });
     });
 
     window.electronAPI.onSearchLog((msg) => updateSearchStatus(msg));
@@ -45,19 +50,22 @@
     let params = { keywords, sortEnabled: false, sortMode: 'default' };
 
     if (currentMode === 'quantity') {
-      // 数量模式
-      const chVal = parseInt(document.getElementById('search-ch').value) || 60;
-      const chUnit = document.getElementById('search-ch-unit').value;
-      const sortEnabled = document.getElementById('search-sort-enable').checked;
+      // 数量模式：读取所有筛选参数
+      const chVal = parseInt(document.getElementById('search-ch')?.value) || 60;
+      const chUnit = document.getElementById('search-ch-unit')?.value || '60';
       params = {
         ...params,
-        days: parseInt(document.getElementById('search-days').value) || 7,
-        filterDate: true,
+        days: parseInt(document.querySelector('input[name="search-time"]:checked')?.value) || 0,
+        filterDate: document.querySelector('input[name="search-time"]:checked')?.value !== '0',
         maxVideos: parseInt(document.getElementById('search-maxv').value) || 10,
         commentHours: chUnit === '3600' ? chVal * 60 : chVal,
         maxComments: parseInt(document.getElementById('search-maxc').value) || 200,
-        sortEnabled: sortEnabled,
-        sortMode: sortEnabled ? (document.querySelector('input[name="search-sort"]:checked')?.value || 'likes') : 'default'
+        sortEnabled: true,
+        sortMode: document.querySelector('input[name="search-sort"]:checked')?.value || 'default',
+        filterTime: document.querySelector('input[name="search-time"]:checked')?.value || '0',
+        filterDuration: document.querySelector('input[name="search-duration-filter"]:checked')?.value || '0',
+        filterScope: document.querySelector('input[name="search-scope"]:checked')?.value || '0',
+        filterContentType: document.querySelector('input[name="search-content-type"]:checked')?.value || '0'
       };
     } else {
       // 时间模式
