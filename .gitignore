@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+*.db
+*.db-journal
+config.json
+config_backups/
+.env
+*.log
+.DS_Store
+Thumbs.db

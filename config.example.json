@@ -1,0 +1,20 @@
+{
+  "search_intent_keywords": ["咨询", "多少钱", "价格", "了解", "想了解", "推荐"],
+  "search_garbage_keywords": ["666", "关注", "互粉", "点赞", "好看"],
+  "monitor_intent_keywords": ["咨询", "多少钱", "价格", "了解", "想了解", "推荐"],
+  "monitor_garbage_keywords": ["666", "关注", "互粉", "点赞", "好看"],
+  "request_delay": 3,
+  "monitor_bloggers": [],
+  "email": {
+    "enable": false,
+    "smtp_server": "smtp.qq.com",
+    "smtp_port": 465,
+    "sender": "",
+    "auth_code": "",
+    "receivers": ""
+  },
+  "wechat": {
+    "enable": false,
+    "webhook_url": ""
+  }
+}

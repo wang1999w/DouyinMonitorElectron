@@ -1,0 +1,111 @@
+/**
+ * 企业微信 Webhook 推送模块
+ * 通过企业微信群机器人 Webhook 发送意向评论通知
+ * 支持 markdown 格式消息
+ */
+
+const axios = require('axios');
+const { addNotifyLog } = require('./database');
+
+/**
+ * 发送单条意向评论到企业微信
+ * @param {Object} item - 评论数据
+ * @param {Object} wechatCfg - 企微配置 { enable, webhook_url }
+ * @returns {Promise<boolean>} 是否发送成功
+ */
+async function sendOne(item, wechatCfg) {
+  if (!wechatCfg || !wechatCfg.enable || !wechatCfg.webhook_url) return false;
+
+  for (let retry = 0; retry < 3; retry++) {
+    try {
+      const content = buildMarkdown(item);
+      const resp = await axios.post(wechatCfg.webhook_url, {
+        msgtype: 'markdown',
+        markdown: { content }
+      }, { timeout: 10000 });
+
+      if (resp.data && resp.data.errcode === 0) {
+        return true;
+      }
+    } catch (e) {
+      await sleep(2000 * (retry + 1));
+    }
+  }
+
+  addNotifyLog(item.comment_id || '', 'wechat', 2, '推送失败');
+  return false;
+}
+
+/**
+ * 发送企微测试消息
+ * @param {Object} wechatCfg - 企微配置
+ * @returns {Promise<boolean>}
+ */
+async function sendTest(wechatCfg) {
+  const testItem = {
+    nickname: '测试用户',
+    douyin_id: 'test123',
+    comment_text: '这是一条测试消息，请问价格是多少？',
+    matched_keywords: '价格,咨询',
+    comment_time: Math.floor(Date.now() / 1000),
+    ip_label: '四川',
+    video_author: '测试博主',
+    video_url: 'https://www.douyin.com/video/test',
+    score: 10
+  };
+  return sendOne(testItem, wechatCfg);
+}
+
+/**
+ * 构建 markdown 格式消息内容
+ * 企业微信 markdown 支持有限（不支持表格、图片等）
+ * @param {Object} item - 评论数据
+ * @returns {string} markdown 字符串
+ */
+function buildMarkdown(item) {
+  const score = item.score || 0;
+  const scoreLabel = score >= 10 ? '🔴时效评论' : score >= 5 ? '🟡近期评论' : '🟢历史评论';
+  const prefix = score >= 10 ? '⚠️【加急】' : '📌【意向】';
+
+  let lines = [
+    `${prefix}<font color="info">抖音意向评论实时告警</font>`,
+    `> 评分: <font color="warning">${score}分</font> | ${scoreLabel}`,
+    `---`,
+    `**用户昵称**: ${item.nickname || ''}`,
+    `**抖音号**: ${item.douyin_id || ''}`,
+    `**评论内容**: ${item.comment_text || ''}`,
+    `**命中关键词**: <font color="warning">${item.matched_keywords || ''}</font>`,
+    `**评论时间**: ${formatTime(item.comment_time)}`,
+    `**IP属地**: ${item.ip_label || ''}`,
+    `**所属博主**: ${item.video_author || ''}`,
+  ];
+
+  if (item.video_url) {
+    lines.push(`**原作品**: [点击查看](${item.video_url})`);
+  }
+
+  lines.push(`---`);
+  lines.push(`> 系统自动采集 · 实时推送`);
+
+  return lines.join('\n');
+}
+
+/**
+ * 格式化时间戳
+ * @param {number} ts - Unix 时间戳（秒）
+ * @returns {string}
+ */
+function formatTime(ts) {
+  if (!ts) return '';
+  try {
+    return new Date(ts * 1000).toLocaleString('zh-CN');
+  } catch (e) {
+    return '';
+  }
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+module.exports = { sendOne, sendTest };

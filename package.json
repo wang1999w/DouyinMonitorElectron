@@ -1,0 +1,45 @@
+{
+  "name": "douyin-monitor-electron",
+  "version": "2.0.0",
+  "description": "抖音博主监控与意向采集系统 - Electron 双栏桌面应用",
+  "main": "./main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:dir": "electron-builder --win --dir"
+  },
+  "author": "DouyinMonitor",
+  "license": "MIT",
+  "dependencies": {
+    "electron-store": "^8.1.0",
+    "sql.js": "^1.10.0",
+    "nodemailer": "^6.9.0",
+    "axios": "^1.7.0",
+    "exceljs": "^4.4.0"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.douyinmonitor.app",
+    "productName": "抖音监控系统",
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    },
+    "files": [
+      "main/**/*",
+      "renderer/**/*",
+      "preload/**/*",
+      "core/**/*",
+      "assets/**/*",
+      "config.example.json"
+    ]
+  }
+}

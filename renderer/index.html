@@ -1,0 +1,207 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>抖音监控系统 v2.0</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- 顶部标题栏 -->
+  <header id="app-header">
+    <h1>抖音博主监控与意向采集系统 v2.0</h1>
+    <div id="header-stats">
+      <span id="stat-today" class="stat-badge">今日匹配: <b>0</b></span>
+      <span id="stat-total" class="stat-badge">总匹配: <b>0</b></span>
+    </div>
+  </header>
+
+  <!-- 主内容区：左栏 BrowserView 占位 + 右栏面板 -->
+  <main id="app-main">
+    <!-- 左栏：BrowserView 渲染区域（由主进程控制） -->
+    <div id="left-panel">
+      <div id="douyin-placeholder">
+        <p>抖音页面加载中...</p>
+      </div>
+    </div>
+
+    <!-- 右栏：功能面板 -->
+    <div id="right-panel">
+      <!-- 面板标签页 -->
+      <div id="panel-tabs">
+        <button class="tab-btn active" data-tab="network">Network</button>
+        <button class="tab-btn" data-tab="search">搜索</button>
+        <button class="tab-btn" data-tab="monitor">监控</button>
+        <button class="tab-btn" data-tab="settings">设置</button>
+      </div>
+
+      <!-- Network 面板 -->
+      <div id="tab-network" class="tab-content active">
+        <div id="network-toolbar">
+          <input type="text" id="network-filter" placeholder="过滤 URL...">
+          <button id="network-clear" class="btn-sm">清空</button>
+          <label><input type="checkbox" id="network-auto-scroll" checked> 自动滚动</label>
+        </div>
+        <div id="network-list"></div>
+      </div>
+
+      <!-- 搜索面板 -->
+      <div id="tab-search" class="tab-content">
+        <div id="search-controls">
+          <div class="ctrl-group">
+            <label>搜索关键词（每行一个）：</label>
+            <textarea id="search-keywords" rows="3" placeholder="输入关键词..."></textarea>
+          </div>
+          <div class="ctrl-row">
+            <label><input type="checkbox" id="search-add-hash" checked> 自动加 #</label>
+            <label><input type="checkbox" id="search-multi-kw"> 多关键词任务</label>
+          </div>
+          <div class="ctrl-row">
+            <label>视频日期：</label>
+            <select id="search-days">
+              <option value="1">1天内</option>
+              <option value="7" selected>7天内</option>
+              <option value="30">30天内</option>
+            </select>
+            <label>视频数量：</label>
+            <input type="number" id="search-maxv" value="10" min="1" max="100" style="width:50px">
+          </div>
+          <div class="ctrl-row">
+            <label>评论时间：</label>
+            <input type="number" id="search-ch" value="60" min="1" style="width:50px">
+            <select id="search-ch-unit">
+              <option value="60">分钟内</option>
+              <option value="3600">小时内</option>
+            </select>
+            <label>最大评论：</label>
+            <input type="number" id="search-maxc" value="200" min="1" style="width:50px">
+          </div>
+          <div class="ctrl-row">
+            <label>排序：</label>
+            <label><input type="radio" name="search-sort" value="likes" checked> 最多点赞</label>
+            <label><input type="radio" name="search-sort" value="newest"> 最新发布</label>
+            <label><input type="radio" name="search-sort" value="default"> 综合</label>
+          </div>
+          <div class="ctrl-row">
+            <button id="btn-search-start" class="btn-primary">开始搜索抓取</button>
+            <button id="btn-search-pause" class="btn-secondary" disabled>暂停</button>
+            <button id="btn-search-stop" class="btn-danger" disabled>停止</button>
+          </div>
+          <div id="search-status">就绪</div>
+        </div>
+        <div id="search-results"></div>
+      </div>
+
+      <!-- 监控面板 -->
+      <div id="tab-monitor" class="tab-content">
+        <div id="monitor-controls">
+          <div class="ctrl-row">
+            <button id="btn-monitor-add" class="btn-primary">添加博主</button>
+            <button id="btn-monitor-del" class="btn-danger">删除选中</button>
+            <button id="btn-monitor-start" class="btn-primary">启动监控</button>
+            <button id="btn-monitor-stop" class="btn-danger" disabled>停止监控</button>
+          </div>
+          <div id="blogger-list"></div>
+          <div id="monitor-keywords">
+            <label>意向关键词（每行一个）：</label>
+            <textarea id="monitor-intent-kw" rows="3"></textarea>
+            <label>垃圾关键词（每行一个）：</label>
+            <textarea id="monitor-garbage-kw" rows="2"></textarea>
+            <button id="btn-save-monitor-kw" class="btn-secondary">保存关键词</button>
+          </div>
+        </div>
+        <div id="monitor-results"></div>
+      </div>
+
+      <!-- 设置面板 -->
+      <div id="tab-settings" class="tab-content">
+        <div id="settings-form">
+          <!-- 邮件设置 -->
+          <fieldset>
+            <legend>邮件推送设置</legend>
+            <div class="ctrl-row">
+              <label><input type="checkbox" id="email-enable"> 启用邮件推送</label>
+            </div>
+            <div class="ctrl-row">
+              <label>SMTP服务器：</label>
+              <input type="text" id="email-smtp" value="smtp.qq.com" style="width:150px">
+              <label>端口：</label>
+              <input type="number" id="email-port" value="465" style="width:60px">
+            </div>
+            <div class="ctrl-row">
+              <label>发件邮箱：</label>
+              <input type="email" id="email-sender" style="width:200px">
+            </div>
+            <div class="ctrl-row">
+              <label>授权码：</label>
+              <input type="password" id="email-auth" style="width:200px">
+            </div>
+            <div class="ctrl-row">
+              <label>收件邮箱：</label>
+              <input type="text" id="email-receivers" placeholder="多个用逗号分隔" style="width:300px">
+            </div>
+            <div class="ctrl-row">
+              <button id="btn-save-email" class="btn-secondary">保存邮件设置</button>
+              <button id="btn-test-email" class="btn-secondary">发送测试邮件</button>
+            </div>
+          </fieldset>
+
+          <!-- 企业微信设置 -->
+          <fieldset>
+            <legend>企业微信 Webhook 推送</legend>
+            <div class="ctrl-row">
+              <label><input type="checkbox" id="wechat-enable"> 启用企微推送</label>
+            </div>
+            <div class="ctrl-row">
+              <label>Webhook URL：</label>
+              <input type="text" id="wechat-url" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." style="width:400px">
+            </div>
+            <div class="ctrl-row">
+              <button id="btn-save-wechat" class="btn-secondary">保存企微设置</button>
+              <button id="btn-test-wechat" class="btn-secondary">发送测试消息</button>
+            </div>
+          </fieldset>
+
+          <!-- 关键词设置 -->
+          <fieldset>
+            <legend>关键词设置</legend>
+            <div class="ctrl-row" style="align-items:flex-start">
+              <div style="flex:1">
+                <label>搜索意向关键词（每行一个）：</label>
+                <textarea id="search-intent-kw" rows="5"></textarea>
+              </div>
+              <div style="flex:1">
+                <label>搜索垃圾关键词（每行一个）：</label>
+                <textarea id="search-garbage-kw" rows="5"></textarea>
+              </div>
+            </div>
+            <div class="ctrl-row">
+              <button id="btn-save-search-kw" class="btn-secondary">保存搜索关键词</button>
+            </div>
+          </fieldset>
+
+          <!-- 导出 -->
+          <fieldset>
+            <legend>数据导出</legend>
+            <div class="ctrl-row">
+              <button id="btn-export" class="btn-primary">导出意向评论 (Excel)</button>
+            </div>
+          </fieldset>
+        </div>
+      </div>
+
+      <!-- 日志区域 -->
+      <div id="log-area">
+        <div id="log-header">运行日志</div>
+        <div id="log-content"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="panels/network.js"></script>
+  <script src="panels/search.js"></script>
+  <script src="panels/monitor.js"></script>
+  <script src="panels/settings.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
