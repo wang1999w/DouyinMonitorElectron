@@ -1,7 +1,7 @@
 /**
  * 请求拦截核心模块
  * 使用 Electron session.webRequest API 拦截抖音 API 请求
- * 过滤规则：只保留包含 api/aweme/comment 的接口请求
+ * 同时拦截 bytedance:// 等外部协议请求
  */
 
 const { URL } = require('url');
@@ -15,12 +15,14 @@ const FILTER_URLS = [
   '*://*.douyin.com/*recommend*'
 ];
 
+/** 需要拦截的外部协议 */
+const BLOCKED_PROTOCOLS = ['bytedance', 'sslocal', 'snssdk', 'aweme'];
+
 /** 静态资源扩展名，用于过滤 */
 const STATIC_EXT = /\.(css|js|png|jpg|jpeg|gif|svg|ico|woff|ttf|eot)(\?|$)/i;
 
 /**
  * 设置请求拦截
- * 监听 BrowserView 的网络请求，过滤并转发给渲染进程
  * @param {BrowserView} douyinView - 抖音 BrowserView
  * @param {BrowserWindow} mainWindow - 主窗口
  */
@@ -29,6 +31,17 @@ function setupWebRequest(douyinView, mainWindow) {
 
   const ses = douyinView.webContents.session;
 
+  // 拦截所有请求，阻止外部协议（bytedance:// 等）
+  ses.webRequest.onBeforeRequest(
+    { urls: ['*://*/*'] },
+    (details, callback) => {
+      const url = details.url.toLowerCase();
+      const shouldBlock = BLOCKED_PROTOCOLS.some(p => url.startsWith(p + ':'));
+      callback({ cancel: shouldBlock });
+    }
+  );
+
+  // 收集 API 请求数据展示到右栏
   ses.webRequest.onCompleted(
     { urls: FILTER_URLS },
     (details) => {
@@ -49,11 +62,6 @@ function setupWebRequest(douyinView, mainWindow) {
   );
 }
 
-/**
- * 判断是否为静态资源请求
- * @param {string} url - 请求 URL
- * @returns {boolean}
- */
 function isStaticResource(url) {
   return STATIC_EXT.test(url);
 }

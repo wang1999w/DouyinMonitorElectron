@@ -61,8 +61,10 @@
 
   /**
    * 显示添加博主模态框
+   * 打开时隐藏 BrowserView，避免模态框被遮挡
    */
-  function showAddBloggerModal() {
+  async function showAddBloggerModal() {
+    await window.electronAPI.hideDouyinView();
     let modal = document.getElementById('blogger-modal');
     if (!modal) {
       modal = createBloggerModal();
@@ -73,6 +75,15 @@
     document.getElementById('bm-times').value = '09:00-12:00\n14:00-18:00';
     document.getElementById('bm-days').value = '7';
     modal.style.display = 'flex';
+  }
+
+  /**
+   * 关闭模态框，恢复 BrowserView
+   */
+  async function closeModal() {
+    const modal = document.getElementById('blogger-modal');
+    if (modal) modal.style.display = 'none';
+    await window.electronAPI.showDouyinView();
   }
 
   /**
@@ -121,11 +132,11 @@
     document.body.appendChild(modal);
 
     modal.querySelector('#bm-cancel').addEventListener('click', () => {
-      modal.style.display = 'none';
+      closeModal();
     });
 
     modal.addEventListener('click', (e) => {
-      if (e.target === modal) modal.style.display = 'none';
+      if (e.target === modal) closeModal();
     });
 
     modal.querySelector('#bm-save').addEventListener('click', async () => {
@@ -155,7 +166,7 @@
       };
 
       await window.electronAPI.addBlogger(blogger);
-      modal.style.display = 'none';
+      closeModal();
       loadBloggerList();
     });
 

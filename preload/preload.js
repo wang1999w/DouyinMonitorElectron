@@ -31,5 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   exportResults: () => ipcRenderer.invoke('export-results'),
   sendTestEmail: () => ipcRenderer.invoke('send-test-email'),
   sendTestWechat: () => ipcRenderer.invoke('send-test-wechat'),
-  getStats: () => ipcRenderer.invoke('get-stats')
+  getStats: () => ipcRenderer.invoke('get-stats'),
+  showDouyinView: () => ipcRenderer.invoke('show-douyin-view'),
+  hideDouyinView: () => ipcRenderer.invoke('hide-douyin-view')
 });

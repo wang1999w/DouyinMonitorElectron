@@ -157,6 +157,25 @@ function registerIpcHandlers(mainWindow) {
       return { success: false, error: err.message };
     }
   });
+
+  // ========== BrowserView 显示/隐藏（模态框用） ==========
+  const { getDouyinView } = require('./window');
+
+  ipcMain.handle('hide-douyin-view', () => {
+    const view = getDouyinView();
+    if (view) {
+      try { mainWindow.removeBrowserView(view); } catch (e) {}
+    }
+    return { success: true };
+  });
+
+  ipcMain.handle('show-douyin-view', () => {
+    const view = getDouyinView();
+    if (view) {
+      try { mainWindow.setBrowserView(view); } catch (e) {}
+    }
+    return { success: true };
+  });
 }
 
 /**
