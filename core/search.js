@@ -22,6 +22,7 @@ const dom = require('./domUtils');
 const videoProcessor = require('./videoProcessor');
 const scheduler = require('./scheduler');
 const pipeline = require('./pipeline');
+const { smartStep, getPageSnapshot, analyzePageState } = require('./smartStep');
 const { getLogger } = require('./logger');
 
 const logger = getLogger('SearchEngine');
@@ -124,16 +125,21 @@ async function startSearch(params, onLog, onResult, onProgress) {
       const kw = keywords[kwIdx];
       log(`[${kwIdx + 1}/${keywordsTotal}] 搜索关键词: ${kw}`);
 
-      if (!(await typeKeywordAndSearch(view, kw))) { log('  搜索失败'); continue; }
-      await sleepWithCheck(task, 5000, 7000);
-      if (await isCaptcha(wc)) {
-        if (!(await waitForCaptchaSolved(wc))) break;
-        await sleepWithCheck(task, 2000);
+      if (!(await typeKeywordAndSearch(view, kw))) {
+        log('  ❌ 搜索未跳转到结果页，终止此关键词');
+        continue;
       }
 
-      // 切换视频标签
-      await clickByTextSafe(view, '视频');
-      await sleepWithCheck(task, 2000, 3000);
+      // 步骤：切换视频标签（带验证）
+      const tabStep = await smartStep('切换视频标签', async () => {
+        await clickByTextSafe(view, '视频');
+        await sleep(2000, 3000);
+      }, async () => {
+        const state = await getPageSnapshot(wc);
+        if (state && state.hasVideoTab) return { success: true };
+        return { success: false, reason: 'video_tab_not_found' };
+      }, { log, retries: 2 });
+      if (!tabStep.success) log('  ⚠ 视频标签未找到，继续');
 
       // 数量模式才应用筛选
       if (isQuantityMode) {
@@ -141,18 +147,24 @@ async function startSearch(params, onLog, onResult, onProgress) {
           || params.filterTime && params.filterTime !== '0'
           || params.filterDuration && params.filterDuration !== '0';
         if (hasFilter) {
-          log('  筛选...');
-          await applySortFilter(view, params);
-          await sleepWithCheck(task, 2000, 3000);
+          const filterStep = await smartStep('执行筛选', async () => {
+            await applySortFilter(view, params);
+            await sleepWithCheck(task, 2000, 3000);
+          }, async () => {
+            const state = await getPageSnapshot(wc);
+            if (state && state.hasFilterBtn) return { success: true };
+            return { success: false, reason: 'filter_btn_not_found' };
+          }, { log, retries: 1 });
+          if (!filterStep.success) log('  ⚠ 筛选未生效，继续采集');
         }
       }
 
-      // 处理视频
+      // 视频处理循环
       const targetCount = isQuantityMode ? (params.maxVideos || 10) : Infinity;
       const startTime = Date.now();
       const maxDuration = isQuantityMode ? Infinity : (params.taskDuration || 30 * 60 * 1000);
-
       let scrollAttempts = 0;
+
       while (!task.stopped && task.processedIds.size < targetCount) {
         if (searchPaused) {
           if (!await waitWhilePaused(task)) break;
@@ -162,7 +174,14 @@ async function startSearch(params, onLog, onResult, onProgress) {
           break;
         }
 
-        const videos = await dom.scanVideoLinks(view);
+        // 步骤：扫描视频列表
+        let videos = [];
+        const scanStep = await smartStep('扫描视频列表', async () => {
+          return await dom.scanVideoLinks(view);
+        }, async () => ({ success: true }), { log, retries: 2 });
+
+        if (scanStep.success && scanStep.data) videos = scanStep.data;
+
         if (videos.length === 0) {
           log('  页面无视频，滚动加载...');
           await human.mouseScroll(wc, 'down', 3);
@@ -331,40 +350,102 @@ async function ensureLogin(wc) {
 
 async function typeKeywordAndSearch(view, keyword) {
   const wc = view.webContents;
-  const searchInput = await dom.readInputValue(view, '[data-e2e="searchbar-input"], input[placeholder*="搜索"]');
-  if (!searchInput) { log('    搜索框未找到'); return false; }
 
-  await human.mouseClick(wc, searchInput.x, searchInput.y + 8);
-  await sleep(300, 500);
+  // 步骤1：确认当前页面状态
+  const state = await getPageSnapshot(wc);
+  const pageInfo = analyzePageState(state);
+  log(`    当前状态: ${pageInfo.phase}${pageInfo.issue ? ' (' + pageInfo.issue + ')' : ''}`);
 
-  // 清空
-  const len = (searchInput.val || '').length;
-  if (len > 0) {
-    for (let i = 0; i < len; i++) {
-      await human.keyPress(wc, 'Backspace');
-      await sleep(30, 60);
-    }
-    await sleep(200, 400);
+  if (pageInfo.phase === 'captcha') {
+    log('    ⚠ 验证码拦截，需手动处理');
+    return false;
   }
 
-  await human.typeText(wc, keyword);
-  await sleep(500, 1000);
+  if (pageInfo.phase !== 'homepage') {
+    log(`    不在首页(当前: ${pageInfo.phase})，尝试导航回首页...`);
+    await wc.loadURL('https://www.douyin.com');
+    await sleep(5000, 7000);
+  }
 
-  // 点击搜索按钮
-  const btn = await wc.executeJavaScript(`(function(){
-    const e = document.querySelector('[data-e2e="searchbar-button"]');
-    if (e) { const r = e.getBoundingClientRect(); return { x: r.x+r.width/2, y: r.y+r.height/2 }; }
-    for (const b of document.querySelectorAll('button,div[role="button"]')) {
-      if ((b.innerText||'').trim()==='搜索') {
-        const r = b.getBoundingClientRect();
-        if (r.width>10 && r.height>10 && r.y<150) return {x:r.x+r.width/2,y:r.y+r.height/2};
-      }
+  // 步骤2：点击搜索框
+  const step1 = await smartStep('点击搜索框', async () => {
+    const si = await dom.readInputValue(view, '[data-e2e="searchbar-input"], input[placeholder*="搜索"]');
+    if (!si) return null;
+    await human.mouseClick(wc, si.x, si.y + 8);
+    await sleep(500, 800);
+    return si;
+  }, async (result) => {
+    if (!result) return { success: false, reason: 'element_not_found' };
+    // 验证：搜索框是否获得焦点
+    const focused = await wc.executeJavaScript(`
+      document.activeElement && (
+        document.activeElement.tagName === 'INPUT' ||
+        document.activeElement.getAttribute('data-e2e') === 'searchbar-input'
+      )
+    `).catch(() => false);
+    return focused
+      ? { success: true }
+      : { success: false, reason: 'element_hidden' };
+  }, { log, retries: 2 });
+
+  if (!step1.success) {
+    log('    搜索框无法获取焦点，终止');
+    return false;
+  }
+
+  // 步骤3：输入关键词
+  const step2 = await smartStep('输入关键词', async () => {
+    await wc.executeJavaScript(`
+      const e = document.querySelector('[data-e2e="searchbar-input"], input[placeholder*="搜索"]');
+      if (e) { e.focus(); e.value = ''; e.value = '${keyword.replace(/'/g, "\\'")}'; e.dispatchEvent(new Event('input', { bubbles: true })); }
+    `);
+    await sleep(800, 1200);
+  }, async () => {
+    const val = await wc.executeJavaScript(`
+      document.querySelector('[data-e2e="searchbar-input"], input[placeholder*="搜索"]')?.value || ''
+    `).catch(() => '');
+    const expected = keyword.replace('#', '');
+    if (val.includes(expected)) {
+      return { success: true, data: { value: val } };
     }
-    return null;
-  })()`).catch(() => null);
+    return { success: false, reason: `input_value_mismatch: expected="${expected}" got="${val}"` };
+  }, { log, retries: 2 });
 
-  if (btn) { await human.mouseClick(wc, btn.x, btn.y); log('    已搜索'); }
-  else { await human.keyPress(wc, 'Enter'); }
+  if (!step2.success) {
+    log('    关键词输入失败，终止');
+    return false;
+  }
+
+  // 步骤4：点击搜索按钮
+  const step3 = await smartStep('点击搜索', async () => {
+    const btn = await wc.executeJavaScript(`(function(){
+      const e = document.querySelector('[data-e2e="searchbar-button"]');
+      if (e) { const r = e.getBoundingClientRect(); return { x: r.x+r.width/2, y: r.y+r.height/2 }; }
+      for (const b of document.querySelectorAll('button,div[role="button"]')) {
+        if ((b.innerText||'').trim()==='搜索') { const r = b.getBoundingClientRect(); if (r.width>10&&r.height>10&&r.y<150) return {x:r.x+r.width/2,y:r.y+r.height/2}; }
+      }
+      return null;
+    })()`).catch(() => null);
+    if (!btn) { await human.keyPress(wc, 'Enter'); return true; }
+    await human.mouseClick(wc, btn.x, btn.y);
+    return true;
+  }, async () => {
+    // 等待页面变化
+    await sleep(3000, 5000);
+    const url = await wc.executeJavaScript('location.href').catch(() => '');
+    const title = await wc.executeJavaScript('document.title').catch(() => '');
+    const isSearch = url.includes('search') || title.includes('搜索');
+    return isSearch
+      ? { success: true, data: { url: url.substring(0, 60), title } }
+      : { success: false, reason: `page_not_changed: url=${url.substring(0, 40)} title=${title}` };
+  }, { log, retries: 2 });
+
+  if (!step3.success) {
+    log('    搜索未跳转到结果页，终止');
+    return false;
+  }
+
+  log('    ✓ 搜索流程完成');
   return true;
 }
 
