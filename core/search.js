@@ -167,7 +167,32 @@ async function startSearch(params, onLog, onResult) {
       // ===== 步骤4：扫描视频 =====
       if (!checkRunning()) break;
       const videos = await scanVideos(view);
-      if (videos.length === 0) { log('  未发现视频'); continue; }
+      if (videos.length === 0) {
+        log('  未发现视频，诊断页面结构...');
+        // 诊断：打印所有链接的 href 格式
+        const links = await wc.executeJavaScript(`
+          (function() {
+            const all = document.querySelectorAll('a[href]');
+            const hrefs = [];
+            for (const a of all) {
+              const h = a.getAttribute('href') || '';
+              if (h.includes('video') || h.includes('aweme') || h.includes('/v/')) {
+                hrefs.push(h.substring(0, 80));
+              }
+            }
+            // 也检查其他可能的视频容器
+            const cards = document.querySelectorAll('[class*="video"], [class*="card"], [class*="item"]');
+            const bodySnippet = document.body.innerHTML.substring(0, 2000);
+            return { hrefs: hrefs.slice(0, 10), cardCount: cards.length, bodySnippet: bodySnippet.substring(0, 500) };
+          })()
+        `).catch(() => null);
+        if (links) {
+          log(`  诊断: 视频相关href ${links.hrefs.length}个`);
+          links.hrefs.forEach(h => log(`    href: ${h}`));
+          log(`  诊断: video/card元素 ${links.cardCount}个`);
+        }
+        continue;
+      }
       log(`  发现 ${videos.length} 个视频`);
 
       // ===== 步骤5：处理视频 =====
@@ -406,6 +431,27 @@ async function processVideo(view, aid, params, intentKw, garbageKw, cdp, onResul
     await sleep(4000, 6000);
 
     if (!checkRunning()) return 0;
+
+    // 诊断：点击后检查页面状态
+    const afterClick = await wc.executeJavaScript(`
+      (function() {
+        return {
+          url: location.href,
+          title: document.title,
+          hasVideoPlayer: !!document.querySelector('video, [class*="player"], [class*="Player"]'),
+          hasComment: !!document.querySelector('[data-e2e="comment-list"], [class*="comment"]'),
+          bodyLen: document.body.innerText.length,
+          bodySnippet: document.body.innerText.substring(0, 200)
+        };
+      })()
+    `).catch(() => null);
+    if (afterClick) {
+      log(`    点击后: URL=${afterClick.url.substring(0, 60)}`);
+      log(`    标题: ${afterClick.title}`);
+      log(`    视频播放器: ${afterClick.hasVideoPlayer ? '存在' : '不存在'}`);
+      log(`    评论区: ${afterClick.hasComment ? '存在' : '不存在'}`);
+      log(`    内容长度: ${afterClick.bodyLen}`);
+    }
 
     // 模拟观看
     await human.mouseMove(wc, rand(300, 700), rand(200, 400));
