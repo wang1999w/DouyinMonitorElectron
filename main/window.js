@@ -1,14 +1,15 @@
 /**
  * 窗口管理模块
- * 负责：主窗口创建、BrowserView（抖音页面）管理
- * 使用 BrowserView 而非 iframe，提供更好的性能和隔离性
+ * 负责：主窗口创建、BrowserView（抖音页面）管理、CDP 拦截器初始化
  */
 
 const { BrowserWindow, BrowserView } = require('electron');
 const path = require('path');
+const CDPInterceptor = require('../core/cdpInterceptor');
 
 let mainWindow = null;
 let douyinView = null;
+let cdpInterceptor = null;
 
 /** 抖音网页 URL */
 const DOUYIN_URL = 'https://www.douyin.com';
@@ -79,6 +80,11 @@ function createDouyinView() {
   douyinView.webContents.on('did-finish-load', () => {
     injectAntiDetection(douyinView);
     injectNavigationBlocker(douyinView);
+    // 首次加载完成后启动 CDP 拦截器
+    if (!cdpInterceptor) {
+      cdpInterceptor = new CDPInterceptor();
+      cdpInterceptor.start(douyinView.webContents);
+    }
   });
 
   mainWindow.on('resize', () => {
@@ -198,6 +204,7 @@ module.exports = {
   createMainWindow,
   getMainWindow,
   getDouyinView,
+  getCDPInterceptor: () => cdpInterceptor,
   updateDouyinViewBounds,
   injectAntiDetection
 };
