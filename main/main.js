@@ -16,24 +16,18 @@ const BLOCKED_PROTOCOLS = ['bytedance', 'sslocal', 'snssdk', 'aweme'];
 
 /**
  * 注册自定义协议处理器
- * 拦截 bytedance:// 等协议，阻止系统弹出外部应用选择框
- * 必须在 app.ready 之前调用
+ * 必须在 app.ready 之后调用
  */
 function registerProtocolHandlers() {
   for (const proto of BLOCKED_PROTOCOLS) {
-    protocol.handle(proto, (request) => {
-      // 什么都不做，返回空响应阻止系统弹窗
+    protocol.handle(proto, () => {
       return new Response('', { status: 200, headers: { 'Content-Type': 'text/html' } });
     });
   }
 }
 
-/**
- * 初始化应用
- */
 function initApp() {
   mainWindow = createMainWindow();
-
   registerIpcHandlers(mainWindow);
 
   const douyinView = getDouyinView();
@@ -43,29 +37,20 @@ function initApp() {
   }
 }
 
-/**
- * 设置导航守卫
- */
 function setupNavigationGuards(view) {
   if (!view || !view.webContents) return;
 
   view.webContents.setWindowOpenHandler(({ url }) => {
-    if (isBlockedUrl(url)) {
-      return { action: 'deny' };
-    }
+    if (isBlockedUrl(url)) return { action: 'deny' };
     return { action: 'allow' };
   });
 
   view.webContents.on('will-navigate', (event, url) => {
-    if (isBlockedUrl(url)) {
-      event.preventDefault();
-    }
+    if (isBlockedUrl(url)) event.preventDefault();
   });
 
   view.webContents.on('did-create-window', (window, details) => {
-    if (isBlockedUrl(details.url)) {
-      window.close();
-    }
+    if (isBlockedUrl(details.url)) window.close();
   });
 }
 
@@ -75,21 +60,15 @@ function isBlockedUrl(url) {
   return BLOCKED_PROTOCOLS.some(p => lower.startsWith(p + ':'));
 }
 
-// 必须在 ready 之前注册协议处理器
-registerProtocolHandlers();
-
 app.whenReady().then(() => {
+  registerProtocolHandlers();
   initApp();
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      initApp();
-    }
+    if (BrowserWindow.getAllWindows().length === 0) initApp();
   });
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  if (process.platform !== 'darwin') app.quit();
 });
