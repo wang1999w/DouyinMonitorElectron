@@ -222,9 +222,19 @@ async function processVideoRobust(view, aid, params, intentKw, garbageKw, cdp, o
     await human.mouseClick(wc, pos.x, pos.y);
     return true;
   }, async () => {
-    await sleep(3000, 5000);
+    await sleep(4000, 6000);
+    // 验证：URL变化 OR 视频播放器出现 OR 评论区元素出现
     const url = wc.getURL();
-    return url.includes('/video/');
+    if (url.includes('/video/')) return true;
+    // 抖音可能用弹窗播放，检查是否有视频播放器或评论按钮
+    const hasVideoUI = await wc.executeJavaScript(`
+      !!(document.querySelector('[class*="video-player"]') ||
+         document.querySelector('[class*="player-wrap"]') ||
+         document.querySelector('[data-e2e="comment-list"]') ||
+         document.querySelector('[class*="comment"]') ||
+         document.querySelector('[class*="VideoPlayer"]'))
+    `).catch(() => false);
+    return hasVideoUI;
   }, { log, retries: 3 });
 
   if (!clickOk) { log('    视频点击失败，跳过'); return 0; }
@@ -349,21 +359,53 @@ async function applySortFilter(view, params) {
 
 async function clickFilterOption(wc, text) {
   try {
-    const pos = await wc.executeJavaScript(`
+    // 策略1：精确匹配文本元素
+    let pos = await wc.executeJavaScript(`
       (function() {
-        for (const el of document.querySelectorAll('*')) {
+        // 优先匹配按钮、span、div中的文本
+        const candidates = document.querySelectorAll('button, span, div, label, a');
+        for (const el of candidates) {
           const t = (el.innerText || '').trim();
-          if (t === '${text}') {
-            const r = el.getBoundingClientRect();
-            if (r.width > 10 && r.height > 10 && r.height < 60 && r.x > 600)
-              return { x: r.x + r.width/2, y: r.y + r.height/2 };
+          if (t !== '${text}') continue;
+          const r = el.getBoundingClientRect();
+          // 筛选面板通常在页面右侧或弹窗中，y > 200
+          if (r.width > 5 && r.height > 5 && r.height < 60 && r.width < 200 && r.y > 100) {
+            return { x: r.x + r.width/2, y: r.y + r.height/2 };
           }
         }
         return null;
       })()
     `);
-    if (pos) { await human.mouseClick(wc, pos.x, pos.y); await sleep(800, 1500); }
-  } catch (e) {}
+
+    // 策略2：如果策略1失败，尝试更宽泛的匹配
+    if (!pos) {
+      pos = await wc.executeJavaScript(`
+        (function() {
+          const all = document.querySelectorAll('*');
+          for (const el of all) {
+            // 只匹配直接文本节点，不匹配父元素
+            if (el.children.length > 2) continue;
+            const t = (el.innerText || '').trim();
+            if (t !== '${text}') continue;
+            const r = el.getBoundingClientRect();
+            if (r.width > 5 && r.height > 5 && r.y > 100 && r.y < 800) {
+              return { x: r.x + r.width/2, y: r.y + r.height/2 };
+            }
+          }
+          return null;
+        })()
+      `);
+    }
+
+    if (pos) {
+      await human.mouseClick(wc, pos.x, pos.y);
+      await sleep(800, 1500);
+    } else {
+      log(`    筛选选项"${text}"未找到`);
+    }
+  } catch (e) {
+    log(`    筛选点击异常: ${e.message}`);
+  }
 }
 
 // ========== 页面操作 ==========
@@ -445,7 +487,18 @@ async function readDomComments(view) {
   } catch (e) { return []; }
 }
 
-function stopSearch() { searchRunning = false; log('搜索已停止'); }
+function stopSearch() {
+  searchRunning = false;
+  log('搜索已停止');
+  // 通知渲染进程更新按钮状态
+  try {
+    const { getMainWindow } = require('../main/window');
+    const win = getMainWindow();
+    if (win && win.webContents) {
+      win.webContents.send('search-log', '搜索已停止');
+    }
+  } catch (e) {}
+}
 function pauseSearch() { log('搜索已暂停'); }
 function isRunning() { return searchRunning; }
 
