@@ -136,6 +136,7 @@ function buildHtml(item) {
       <tr><td style="color:#666;">评论时间</td><td>${formatTime(item.comment_time || item.create_time)}</td></tr>
       <tr><td style="color:#666;">IP属地</td><td>${escapeHtml(item.ip_label || '未采集')}</td></tr>
       <tr><td style="color:#666;">所属博主</td><td>${escapeHtml(item.video_author || '未采集')}</td></tr>
+      <tr><td style="color:#666;">博主主页</td><td><a href="${escapeHtml(item.author_profile || item.profile_url || '')}" target="_blank" style="color:#1a73e8;">${(item.author_profile || item.profile_url) ? '点击访问' : '未采集'}</a></td></tr>
       <tr><td style="color:#666;">视频标题</td><td>${escapeHtml((item.video_title || item.video_desc || '').slice(0, 50))}</td></tr>
       <tr><td style="color:#666;">原作品</td><td><a href="${escapeHtml(videoUrl)}" target="_blank" style="color:#1a73e8;">${escapeHtml(videoUrl.slice(0, 60))}${videoUrl.length > 60 ? '...' : ''}</a></td></tr>
     </table>

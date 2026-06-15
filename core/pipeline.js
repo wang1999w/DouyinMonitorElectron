@@ -49,6 +49,7 @@ function processComment(cdpComment, domComment, videoInfo, keywords) {
     video_desc: videoInfo.desc || merged.video_desc || '未采集',
     video_author: videoInfo.author || merged.video_author || '未采集',
     video_url: videoInfo.video_url || merged.video_url || `https://www.douyin.com/video/${videoInfo.aweme_id}`,
+    author_profile: videoInfo.authorProfile || merged.author_profile || '',
     matched_keywords: matchedKeywords,
     score: score,
     digg_count: merged.digg_count || 0,

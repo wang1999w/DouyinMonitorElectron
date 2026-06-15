@@ -97,16 +97,17 @@ async function processVideo(ctx) {
     // 从页面提取视频作者信息
     const authorInfo = await wc.executeJavaScript(`
       (function(){
-        const info = { author: '', desc: '' };
-        // 找博主名称（@开头的链接）
+        const info = { author: '', desc: '', profileUrl: '' };
+        // 找博主名称（@开头或用户链接旁边的文字）
         const userLinks = document.querySelectorAll('a[href*="/user/"]');
         for (const a of userLinks) {
           const r = a.getBoundingClientRect();
           if (r.width > 5 && r.height > 5) {
+            const href = a.getAttribute('href') || '';
             const name = (a.innerText || '').trim().replace(/^@/, '');
             if (name.length > 0 && name.length < 30) {
               info.author = name;
-              info.authorProfile = a.getAttribute('href') || '';
+              info.profileUrl = href.startsWith('http') ? href : 'https://www.douyin.com' + href;
               break;
             }
           }
@@ -122,7 +123,7 @@ async function processVideo(ctx) {
         }
         return info;
       })()
-    `).catch(() => ({ author: '', desc: '' }));
+    `).catch(() => ({ author: '', desc: '', profileUrl: '' }));
 
     // 补充视频信息
     if (cdp?.currentVideo?.aweme_id === aid) {
@@ -131,6 +132,10 @@ async function processVideo(ctx) {
     } else {
       videoInfo.desc = videoInfo.desc || authorInfo.desc || '';
       videoInfo.author = videoInfo.author || authorInfo.author || '';
+    }
+    // 补充博主主页链接
+    if (authorInfo.profileUrl && !videoInfo.authorProfile) {
+      videoInfo.authorProfile = authorInfo.profileUrl;
     }
 
     result.cdp = cdpComments.length;

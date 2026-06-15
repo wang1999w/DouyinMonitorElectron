@@ -79,7 +79,7 @@ function buildMarkdown(item) {
     `**IP属地**: ${item.ip_label || '未采集'}`,
     `**所属博主**: ${item.video_author || '未采集'}`,
     `**原作品**: [点击查看](${item.video_url || '未采集'})`,
-    `**用户主页**: ${item.profile_url || '未采集'}`,
+    `**博主主页**: ${item.author_profile || item.profile_url || '未采集'}`,
   ];
 
   lines.push(`---`);
