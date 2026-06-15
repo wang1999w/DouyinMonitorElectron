@@ -79,13 +79,26 @@ function initTabs() {
 }
 
 /**
- * 统一日志中心
- * 接受主进程任何分类的日志，全部显示
+ * 日志路由
+ * 系统日志 → 运行日志面板
+ * 任务日志 → 对应的任务面板（搜索/监控各自独立）
  */
 function initLogListener() {
-  window.electronAPI.onSearchLog((msg) => appendLog(msg, 'search'));
-  window.electronAPI.onMonitorLog((msg) => appendLog(msg, 'monitor'));
-  window.electronAPI.onSchedulerLog && window.electronAPI.onSchedulerLog((msg) => appendLog(msg, 'scheduler'));
+  // 系统级消息：调度器、CDP、环境检查等 → 运行日志
+  window.electronAPI.onSchedulerLog && window.electronAPI.onSchedulerLog((msg) => appendLog(msg, 'system'));
+  // 搜索任务的系统级消息（🔔通知、验证码、完成/停止） → 运行日志
+  window.electronAPI.onSearchLog((msg) => {
+    if (msg.includes('🔔') || msg.includes('✅') || msg.includes('🛑') || msg.includes('⚠️') || msg.includes('启动') || msg.includes('完成') || msg.includes('停止') || msg.includes('异常')) {
+      appendLog(msg, 'system');
+    }
+    // 其他搜索日志由 search.js 面板自己处理
+  });
+  // 监控任务的系统级消息 → 运行日志
+  window.electronAPI.onMonitorLog((msg) => {
+    if (msg.includes('🔔') || msg.includes('✅') || msg.includes('🛑') || msg.includes('⚠️') || msg.includes('启动') || msg.includes('完成') || msg.includes('停止') || msg.includes('异常')) {
+      appendLog(msg, 'system');
+    }
+  });
 }
 
 function initErrorListener() {

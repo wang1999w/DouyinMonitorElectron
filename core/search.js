@@ -262,10 +262,74 @@ async function doSearch(view, keyword) {
 
   // 找搜索框
   const si = await dom.findSearchInput(view);
-  if (!si) {
-    log('  ❌ 搜索框未找到');
-    return false;
+  if (!si) { log('  ❌ 搜索框未找到'); return false; }
+  log(`  搜索框: (${Math.round(si.x)},${Math.round(si.y)})`);
+
+  // 点击搜索框
+  await human.mouseClick(wc, si.x, si.y + 5);
+  await sleep(400, 600);
+
+  // 输入关键词
+  const setOk = await js(wc, `(function(){
+    const e = document.querySelector('[data-e2e="searchbar-input"], input[placeholder*="搜索"]');
+    if (!e) return false;
+    e.focus();
+    e.click();
+    try {
+      const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set;
+      s.call(e, '${keyword.replace(/'/g,"\\'")}');
+    } catch(_) { e.value = '${keyword.replace(/'/g,"\\'")}'; }
+    e.dispatchEvent(new Event('input',{bubbles:true}));
+    e.dispatchEvent(new Event('change',{bubbles:true}));
+    return true;
+  })()`);
+
+  if (!setOk) { log('  ❌ 输入失败'); return false; }
+  await sleep(500, 800);
+  log(`  ✓ 输入: ${keyword}`);
+
+  // 点击搜索按钮
+  const btn = await dom.findSearchButton(view);
+  if (btn) {
+    await human.mouseClick(wc, btn.x, btn.y);
+    log('  ✓ 搜索按钮');
+  } else {
+    log('  按回车');
+    await human.keyPress(wc, 'Enter');
   }
+
+  // 等待页面跳转（普通 sleep，不检查暂停——搜索期间不应暂停）
+  await sleep(6000, 8000);
+
+  // 验证
+  const url = await js(wc, 'location.href') || '';
+  let isSearch = url.includes('search');
+
+  // 如果URL没变，再按一次回车
+  if (!isSearch) {
+    log('  搜索未生效，按回车重试...');
+    await human.keyPress(wc, 'Enter');
+    await sleep(5000, 7000);
+    const url2 = await js(wc, 'location.href') || '';
+    isSearch = url2.includes('search');
+    if (isSearch) {
+      log('  ✓ 回车重试成功');
+    } else {
+      log(`  ❌ 搜索失败 (${url2.substring(0, 50)})`);
+      return false;
+    }
+  }
+
+  log(`  ✓ 搜索页`);
+
+  // 验证码
+  if (await dom.hasCaptcha(view)) {
+    log('  ⚠️ 验证码！');
+    while (await dom.hasCaptcha(view) && searchRunning) await sleep(3000);
+  }
+
+  return true;
+}
   log(`  搜索框: (${Math.round(si.x)},${Math.round(si.y)})`);
 
   // 点击搜索框
