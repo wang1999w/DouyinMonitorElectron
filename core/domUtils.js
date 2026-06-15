@@ -220,31 +220,34 @@ async function getCommentCount(view) {
  * 读取评论区 DOM 评论
  */
 async function readDomComments(view) {
-  return (await execJS(view.webContents, `(function(){
-    const result = [];
-    const seen = new Set();
-    const SKIP = new Set(['回复','分享','作者赞过','收起','展开','举报','复制','删除','赞','踩','抢沙发','添加表情','查看更多回复','查看全部回复','更多回复','抢首评']);
-    const items = document.querySelectorAll('[data-e2e="comment-list"] > div > div, [class*="comment-item"], [class*="CommentItem"]');
-    for (const item of items) {
-      let best = '';
-      let nick = '';
-      for (const el of item.querySelectorAll('p, span, div')) {
-        const t = (el.innerText || '').trim();
-        if (!t || t.length < 3 || t.length > 500 || SKIP.has(t)) continue;
-        if (/^\\d+$/.test(t) || /^[\\d\\.]+万?$/.test(t)) continue;
-        if (t.length > best.length) best = t;
-      }
-      if (!best || best.length < 4 || seen.has(best)) continue;
-      seen.add(best);
-      const ne = item.querySelector('a[href*="/user/"]');
-      if (ne) {
-        const nt = (ne.innerText || '').trim();
-        if (nt.length > 0 && nt.length < 30 && !SKIP.has(nt)) nick = nt;
-      }
-      result.push({ text: best, nickname: nick, comment_id: 'dom_' + Math.random().toString(36).substr(2, 9), create_time: 0, ip_label: '', source: 'dom' });
-    }
-    return result;
-  })()`) || [];
+  const script = [
+    '(function(){',
+    '  const result = [];',
+    '  const seen = new Set();',
+    '  const SKIP = new Set(["回复","分享","作者赞过","收起","展开","举报","复制","删除","赞","踩","抢沙发","添加表情","查看更多回复","查看全部回复","更多回复","抢首评"]);',
+    '  const items = document.querySelectorAll(\'[data-e2e="comment-list"] > div > div, [class*="comment-item"], [class*="CommentItem"]\');',
+    '  for (const item of items) {',
+    '    let best = "";',
+    '    let nick = "";',
+    '    for (const el of item.querySelectorAll("p, span, div")) {',
+    '      const t = (el.innerText || "").trim();',
+    '      if (!t || t.length < 3 || t.length > 500 || SKIP.has(t)) continue;',
+    '      if (/^\\d+$/.test(t) || /^[\\d\\.]+万?$/.test(t)) continue;',
+    '      if (t.length > best.length) best = t;',
+    '    }',
+    '    if (!best || best.length < 4 || seen.has(best)) continue;',
+    '    seen.add(best);',
+    '    const ne = item.querySelector(\'a[href*="/user/"]\');',
+    '    if (ne) {',
+    '      const nt = (ne.innerText || "").trim();',
+    '      if (nt.length > 0 && nt.length < 30 && !SKIP.has(nt)) nick = nt;',
+    '    }',
+    '    result.push({ text: best, nickname: nick, comment_id: "dom_" + Math.random().toString(36).substr(2, 9), create_time: 0, ip_label: "", source: "dom" });',
+    '  }',
+    '  return result;',
+    '})()'
+  ].join('\n');
+  return (await execJS(view.webContents, script)) || [];
 }
 
 /**
