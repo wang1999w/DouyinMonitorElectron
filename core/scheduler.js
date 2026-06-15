@@ -1,30 +1,22 @@
 /**
  * 全局任务调度器
  * 核心闭环：监控任务优先级 > 搜索任务
- * 机制：监控触发时暂停搜索 → 执行监控 → 回到首页 → 恢复搜索
+ * 时间触发：每个博主配置独立的触发时间点（如 "09:00"、"14:00"）
+ * 到点自动执行一次监控任务，完成后自动休息或恢复搜索
  */
 
 const { getLogger } = require('./logger');
 const logger = getLogger('Scheduler');
 
-/** 任务状态 */
-const TASK_STATE = {
-  IDLE: 'idle',
-  SEARCHING: 'searching',
-  MONITORING: 'monitoring',
-  SEARCH_PAUSED: 'search_paused'
-};
+const TASK_STATE = { IDLE: 'idle', SEARCHING: 'searching', MONITORING: 'monitoring', SEARCH_PAUSED: 'search_paused' };
 
 let state = TASK_STATE.IDLE;
 let searchParams = null;
 let searchAbortFlag = false;
 let monitorTimer = null;
 let logCallback = null;
+let lastTriggerMinute = -1; // 防止同一分钟内重复触发
 
-/**
- * 初始化调度器
- * @param {Function} onLog - 日志回调
- */
 function init(onLog) {
   logCallback = onLog;
   monitorTimer = setInterval(tick, 30000);
@@ -32,8 +24,8 @@ function init(onLog) {
 }
 
 /**
- * 调度器心跳（每 30 秒检查一次）
- * 检查是否有博主的监控时间到了
+ * 调度器心跳（每 30 秒检查）
+ * 检查是否有博主的触发时间点到了
  */
 async function tick() {
   if (state === TASK_STATE.MONITORING) return;
@@ -42,31 +34,28 @@ async function tick() {
     const config = require('./config');
     const cfg = config.loadConfig();
     const bloggers = (cfg.monitor_bloggers || []).filter(b => b.status === 1);
-
     if (bloggers.length === 0) return;
 
     const now = new Date();
-    const nowMinutes = now.getHours() * 60 + now.getMinutes();
+    const currentMinute = now.getHours() * 60 + now.getMinutes();
+    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+    // 同一分钟内只触发一次
+    if (currentMinute === lastTriggerMinute) return;
 
     for (const blogger of bloggers) {
-      if (!blogger.time_ranges || blogger.time_ranges.length === 0) continue;
+      const triggerTimes = blogger.trigger_times || [];
+      if (triggerTimes.length === 0) continue;
 
-      for (const tr of blogger.time_ranges) {
-        try {
-          const parts = tr.split('-');
-          if (parts.length !== 2) continue;
-          const [sh, sm] = parts[0].split(':').map(Number);
-          const [eh, em] = parts[1].split(':').map(Number);
-          const startMin = sh * 60 + sm;
-          const endMin = eh * 60 + em;
-
-          // 在时间段的前 2 分钟内触发（避免重复触发）
-          if (nowMinutes >= startMin && nowMinutes <= startMin + 2) {
-            log(`触发监控任务: ${blogger.nickname} (${tr})`);
-            await executeMonitorWithPriority(blogger, cfg);
-            return; // 一次只执行一个博主的监控
-          }
-        } catch (e) { continue; }
+      for (const tt of triggerTimes) {
+        if (tt === currentTime) {
+          lastTriggerMinute = currentMinute;
+          log(`触发监控任务: ${blogger.nickname} (时间点 ${tt})`);
+          const config = require('./config');
+          const cfg = config.loadConfig();
+          await executeMonitorWithPriority(blogger, cfg);
+          return;
+        }
       }
     }
   } catch (e) {
@@ -76,29 +65,25 @@ async function tick() {
 
 /**
  * 带优先级的监控执行
- * 如果搜索正在运行 → 暂停搜索 → 执行监控 → 恢复搜索
+ * 搜索运行中 → 暂停搜索 → 执行监控 → 回首页 → 恢复搜索
  */
 async function executeMonitorWithPriority(blogger, cfg) {
-  const monitorEngine = require('./monitor');
   const searchEngine = require('./search');
-  const database = require('./database');
 
   // 如果搜索正在运行，暂停它
   if (state === TASK_STATE.SEARCHING) {
     log('监控任务优先：暂停搜索任务');
     searchAbortFlag = true;
     state = TASK_STATE.SEARCH_PAUSED;
-    // 等待搜索实际停止
-    for (let i = 0; i < 30; i++) {
-      if (state === TASK_STATE.SEARCH_PAUSED) break;
+    // 等待搜索实际停止（最多 10 秒）
+    for (let i = 0; i < 20; i++) {
+      if (!searchEngine.isRunning()) break;
       await sleep(500);
     }
   }
 
   // 执行监控
   state = TASK_STATE.MONITORING;
-  log(`开始执行监控: ${blogger.nickname}`);
-
   try {
     const monitorEngine = require('./monitor');
     await monitorEngine.executeSingleBlogger(blogger, cfg, logCallback);
@@ -114,71 +99,44 @@ async function executeMonitorWithPriority(blogger, cfg) {
   }
 
   // 恢复搜索
-  if (state === TASK_STATE.MONITORING && searchAbortFlag) {
+  if (searchAbortFlag && searchParams) {
     state = TASK_STATE.IDLE;
     searchAbortFlag = false;
-    if (searchParams) {
-      log('监控完成，恢复搜索任务');
-      const searchEngine = require('./search');
-      state = TASK_STATE.SEARCHING;
-      await searchEngine.resumeSearch(searchParams, logCallback);
-    } else {
-      state = TASK_STATE.IDLE;
-    }
+    log('监控完成，恢复搜索任务');
+    state = TASK_STATE.SEARCHING;
+    const searchEngine = require('./search');
+    await searchEngine.startSearch(searchParams, logCallback);
   } else {
     state = TASK_STATE.IDLE;
+    searchAbortFlag = false;
   }
 
   log('监控任务完成');
 }
 
-/**
- * 导航回首页
- */
 async function navigateHome(view) {
   try {
-    await sendKey(view, 'l', ['ctrl']);
+    const { keyPress, typeText } = require('./humanBehavior');
+    const wc = view.webContents;
+    await keyPress(wc, 'l', ['ctrl']);
     await sleep(200, 400);
-    await sendKey(view, 'a', ['ctrl']);
+    await keyPress(wc, 'a', ['ctrl']);
     await sleep(50, 100);
-    await sendKey(view, 'Backspace');
+    await keyPress(wc, 'Backspace');
     await sleep(100, 200);
-    const url = 'https://www.douyin.com';
-    for (const ch of url) {
-      await sendChar(view, ch);
-      await sleep(10, 25);
-    }
+    await typeText(wc, 'https://www.douyin.com');
     await sleep(200, 400);
-    await sendKey(view, 'Enter');
+    await keyPress(wc, 'Enter');
     await sleep(2000, 3000);
   } catch (e) {}
 }
 
-async function sendKey(view, key, modifiers) {
-  const mods = modifiers || [];
-  await view.webContents.sendInputEvent({ type: 'keyDown', key, keyCode: key, modifiers: mods });
-  await sleep(30, 60);
-  await view.webContents.sendInputEvent({ type: 'keyUp', key, keyCode: key, modifiers: mods });
-  await sleep(30, 60);
-}
-
-async function sendChar(view, char) {
-  await view.webContents.sendInputEvent({ type: 'char', char });
-  await sleep(8, 20);
-}
-
-/**
- * 注册搜索任务（供搜索模块调用）
- */
 function registerSearch(params) {
   searchParams = params;
   state = TASK_STATE.SEARCHING;
   searchAbortFlag = false;
 }
 
-/**
- * 通知搜索任务完成
- */
 function notifySearchDone() {
   if (state !== TASK_STATE.SEARCH_PAUSED) {
     state = TASK_STATE.IDLE;
@@ -186,19 +144,8 @@ function notifySearchDone() {
   searchParams = null;
 }
 
-/**
- * 检查是否应该中止搜索
- */
-function shouldAbortSearch() {
-  return searchAbortFlag;
-}
-
-/**
- * 获取当前状态
- */
-function getState() {
-  return state;
-}
+function shouldAbortSearch() { return searchAbortFlag; }
+function getState() { return state; }
 
 function log(msg) {
   logger.info(msg);

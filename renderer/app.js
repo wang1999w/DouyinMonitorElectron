@@ -119,8 +119,6 @@ async function loadConfig() {
     // 关键词
     setTextarea('search-intent-kw', cfg.search_intent_keywords || []);
     setTextarea('search-garbage-kw', cfg.search_garbage_keywords || []);
-    setTextarea('monitor-intent-kw', cfg.monitor_intent_keywords || []);
-    setTextarea('monitor-garbage-kw', cfg.monitor_garbage_keywords || []);
   } catch (e) {
     appendLog(`加载配置失败: ${e.message}`);
   }

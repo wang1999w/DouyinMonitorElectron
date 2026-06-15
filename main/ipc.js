@@ -21,7 +21,7 @@ let monitorEngine = null;
 function loadCoreModules() {
   if (!database) {
     database = require('../core/database');
-    database.initDatabase();
+    database.initDatabase().catch(() => {});
     config = require('../core/config');
     matchModule = require('../core/match');
     emailModule = require('../core/email');

@@ -29,8 +29,8 @@ const DEFAULT_CONFIG = {
  * {
  *   sec_uid: string,          // 博主主页 ID
  *   nickname: string,         // 博主昵称
- *   time_ranges: string[],    // 监控时段 ["09:00-09:40"]
- *   intent_keywords: string[],// 该博主的意向关键词（独立于搜索）
+ *   trigger_times: string[],  // 触发时间点 ["09:00", "14:00"]（到点自动执行一次）
+ *   intent_keywords: string[],// 该博主的意向关键词
  *   garbage_keywords: string[],// 该博主的垃圾关键词
  *   date_value: number,       // 作品日期筛选（天）
  *   status: number            // 1=启用 0=暂停
@@ -60,7 +60,7 @@ function loadConfig() {
  * @param {Object} cfg - 配置对象
  */
 function saveConfig(cfg) {
-  autoBackup();
+  autoBackup(cfg);
   const dir = path.dirname(CONFIG_PATH);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -98,15 +98,13 @@ function mergeDefaults(cfg) {
  * 自动备份当前配置
  * 保留最近 20 个备份
  */
-function autoBackup() {
+function autoBackup(newCfg) {
   if (!fs.existsSync(CONFIG_PATH)) return;
 
   try {
-    const oldCfg = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    const newCfg = fs.existsSync(CONFIG_PATH)
-      ? fs.readFileSync(CONFIG_PATH, 'utf-8')
-      : '';
-    if (oldCfg === newCfg) return;
+    const oldRaw = fs.readFileSync(CONFIG_PATH, 'utf-8');
+    const newRaw = JSON.stringify(newCfg, null, 2);
+    if (oldRaw === newRaw) return;
   } catch (e) {
     return;
   }

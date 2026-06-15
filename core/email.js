@@ -128,16 +128,16 @@ function buildHtml(item) {
       </span>
     </div>
     <table width="100%" cellpadding="8" cellspacing="0">
-      <tr><td width="90" style="color:#666;">用户昵称</td><td style="font-weight:bold;color:#333;">${item.nickname || ''}</td></tr>
-      <tr><td style="color:#666;">抖音号</td><td>${item.douyin_id || ''}</td></tr>
-      <tr><td style="color:#666;">主页链接</td><td><a href="${item.profile_url || ''}" target="_blank" style="color:#1a73e8;">点击访问</a></td></tr>
-      <tr><td style="color:#666;">评论内容</td><td style="background:#fff;padding:10px;border-radius:4px;">${item.comment_text || ''}</td></tr>
-      <tr><td style="color:#666;">命中关键词</td><td style="color:#d93025;font-weight:bold;">${item.matched_keywords || ''}</td></tr>
+      <tr><td width="90" style="color:#666;">用户昵称</td><td style="font-weight:bold;color:#333;">${escapeHtml(item.nickname)}</td></tr>
+      <tr><td style="color:#666;">抖音号</td><td>${escapeHtml(item.douyin_id)}</td></tr>
+      <tr><td style="color:#666;">主页链接</td><td><a href="${escapeHtml(item.profile_url)}" target="_blank" style="color:#1a73e8;">点击访问</a></td></tr>
+      <tr><td style="color:#666;">评论内容</td><td style="background:#fff;padding:10px;border-radius:4px;">${escapeHtml(item.comment_text || item.text)}</td></tr>
+      <tr><td style="color:#666;">命中关键词</td><td style="color:#d93025;font-weight:bold;">${escapeHtml(item.matched_keywords)}</td></tr>
       <tr><td style="color:#666;">评论时间</td><td>${formatTime(item.comment_time)}</td></tr>
-      <tr><td style="color:#666;">IP属地</td><td>${item.ip_label || ''}</td></tr>
-      <tr><td style="color:#666;">所属博主</td><td>${item.video_author || ''}</td></tr>
-      <tr><td style="color:#666;">视频标题</td><td>${(item.video_title || '').slice(0, 50)}</td></tr>
-      <tr><td style="color:#666;">原作品</td><td><a href="${videoUrl}" target="_blank" style="color:#1a73e8;">${videoUrl.slice(0, 60)}${videoUrl.length > 60 ? '...' : ''}</a></td></tr>
+      <tr><td style="color:#666;">IP属地</td><td>${escapeHtml(item.ip_label)}</td></tr>
+      <tr><td style="color:#666;">所属博主</td><td>${escapeHtml(item.video_author)}</td></tr>
+      <tr><td style="color:#666;">视频标题</td><td>${escapeHtml((item.video_title || '').slice(0, 50))}</td></tr>
+      <tr><td style="color:#666;">原作品</td><td><a href="${escapeHtml(videoUrl)}" target="_blank" style="color:#1a73e8;">${escapeHtml(videoUrl.slice(0, 60))}${videoUrl.length > 60 ? '...' : ''}</a></td></tr>
     </table>
   </div>
   <p style="text-align:center;color:#999;font-size:12px;margin-top:15px;">本邮件由系统自动发送，请勿直接回复</p>
@@ -170,6 +170,11 @@ function formatTime(ts) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 module.exports = { sendOne, sendTest };

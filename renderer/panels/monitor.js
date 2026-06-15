@@ -41,13 +41,13 @@
     currentBloggers.forEach((b, i) => {
       const item = document.createElement('div');
       item.className = 'blogger-item' + (i === selectedBloggerIdx ? ' selected' : '');
-      const times = (b.time_ranges || []).join(', ') || '全天';
+      const times = (b.trigger_times || []).join(', ') || '未设置';
       const intentCount = (b.intent_keywords || []).length;
       const garbCount = (b.garbage_keywords || []).length;
       item.innerHTML = `
         <div style="flex:1;min-width:0;">
           <div style="font-weight:600;font-size:13px;">${escapeHtml(b.nickname || '未命名')}</div>
-          <div style="font-size:10px;color:#888;margin-top:2px;">时段: ${escapeHtml(times)} | 意向词: ${intentCount}个 | 垃圾词: ${garbCount}个</div>
+          <div style="font-size:10px;color:#888;margin-top:2px;">触发: ${escapeHtml(times)} | 意向词: ${intentCount}个 | 垃圾词: ${garbCount}个</div>
         </div>
         <span style="font-size:11px;color:${b.status === 1 ? '#34a853' : '#999'};">${b.status === 1 ? '启用' : '暂停'}</span>
       `;
@@ -67,7 +67,7 @@
     // 清空表单
     document.getElementById('bm-nickname').value = '';
     document.getElementById('bm-secuid').value = '';
-    document.getElementById('bm-times').value = '09:00-12:00\n14:00-18:00';
+    document.getElementById('bm-times').value = '09:00\n14:00';
     document.getElementById('bm-intent-kw').value = '';
     document.getElementById('bm-garbage-kw').value = '';
     document.getElementById('bm-days').value = '7';
@@ -94,9 +94,9 @@
         </div>
 
         <div style="margin-bottom:10px;">
-          <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">监控时段 <span style="color:#999;">（每行一个，如 09:00-09:40）</span></label>
-          <textarea id="bm-times" rows="2" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;box-sizing:border-box;font-family:monospace;resize:vertical;">09:00-12:00
-14:00-18:00</textarea>
+          <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">触发时间点 <span style="color:#999;">（每行一个，如 09:00，到点自动执行一次监控）</span></label>
+          <textarea id="bm-times" rows="2" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;box-sizing:border-box;font-family:monospace;resize:vertical;">09:00
+14:00</textarea>
         </div>
 
         <div style="display:flex;gap:12px;margin-bottom:10px;">
@@ -139,12 +139,12 @@
       const days = parseInt(document.getElementById('bm-days').value) || 7;
 
       if (!secUid) { alert('请填写博主 sec_uid'); return; }
-      if (!timesStr) { alert('请至少填写一个监控时段'); return; }
+      if (!timesStr) { alert('请至少填写一个触发时间点'); return; }
 
       const blogger = {
         sec_uid: secUid,
         nickname: nickname || '未命名',
-        time_ranges: timesStr.split('\n').map(s => s.trim()).filter(Boolean),
+        trigger_times: timesStr.split('\n').map(s => s.trim()).filter(Boolean),
         intent_keywords: intentStr ? intentStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
         garbage_keywords: garbageStr ? garbageStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
         date_value: days,

@@ -163,6 +163,10 @@ function stopSearch() {
   log('搜索已停止');
 }
 
+function pauseSearch() {
+  log('搜索已暂停（由监控任务触发）');
+}
+
 function isRunning() { return searchRunning; }
 
 // ========== 页面操作 ==========
@@ -306,4 +310,4 @@ function rand(min, max) {
   return Math.floor(Math.random() * (max - min) + min);
 }
 
-module.exports = { startSearch, stopSearch, isRunning };
+module.exports = { startSearch, stopSearch, pauseSearch, isRunning };

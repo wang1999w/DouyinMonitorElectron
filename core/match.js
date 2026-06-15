@@ -19,7 +19,7 @@ function matchIntent(text, intentKeywords, garbageKeywords) {
 
   // 先检查垃圾关键词
   for (const g of garbageKeywords) {
-    if (g.toLowerCase().includes(lowerText) || lowerText.includes(g.toLowerCase())) {
+    if (lowerText.includes(g.toLowerCase())) {
       return [false, [], true];
     }
   }

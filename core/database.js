@@ -165,7 +165,6 @@ function queryOne(sql, params = []) {
  */
 function run(sql, params = []) {
   db.run(sql, params);
-  saveToDisk();
 }
 
 // ========== 视频表操作 ==========
