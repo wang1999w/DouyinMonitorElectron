@@ -51,14 +51,13 @@
 
     if (currentMode === 'quantity') {
       // 数量模式：读取所有筛选参数
-      const chVal = parseInt(document.getElementById('search-ch')?.value) || 60;
-      const chUnit = document.getElementById('search-ch-unit')?.value || '60';
+      const commentHours = parseInt(document.getElementById('search-ch')?.value) || 60;
       params = {
         ...params,
         days: parseInt(document.querySelector('input[name="search-time"]:checked')?.value) || 0,
         filterDate: document.querySelector('input[name="search-time"]:checked')?.value !== '0',
         maxVideos: parseInt(document.getElementById('search-maxv').value) || 10,
-        commentHours: chUnit === '3600' ? chVal * 60 : chVal,
+        commentHours: commentHours,
         maxComments: parseInt(document.getElementById('search-maxc').value) || 200,
         sortEnabled: true,
         sortMode: document.querySelector('input[name="search-sort"]:checked')?.value || 'default',

@@ -112,6 +112,8 @@
             <select id="bm-days" style="padding:5px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
               <option value="1">1天内</option>
               <option value="7" selected>7天内</option>
+              <option value="15">15天内</option>
+              <option value="30">30天内</option>
             </select>
           </div>
         </div>
@@ -125,14 +127,6 @@
             <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">垃圾关键词 <span style="color:#999;">（每行一个）</span></label>
             <textarea id="bm-garbage-kw" rows="4" placeholder="666\n关注\n互粉\n点赞" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;box-sizing:border-box;resize:vertical;"></textarea>
           </div>
-        </div>
-
-        <div style="margin-bottom:14px;">
-          <label style="font-size:12px;color:#666;">作品日期筛选：</label>
-          <select id="bm-days" style="padding:4px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
-            <option value="1">1天内</option>
-            <option value="7" selected>7天内</option>
-          </select>
         </div>
 
         <div style="display:flex;gap:8px;justify-content:flex-end;">
