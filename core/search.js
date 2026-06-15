@@ -1,8 +1,7 @@
 /**
  * 搜索引擎模块
  * 从 Python core/search_engine.py 迁移
- * 通过 BrowserView 导航到抖音搜索页，注入 JS 模拟操作
- * 拦截搜索结果 API，提取视频和评论数据进行意向匹配
+ * 全部使用鼠标模拟和键盘模拟，不使用 loadURL 跳转，降低风控
  */
 
 const { getDouyinView } = require('../main/window');
@@ -10,29 +9,18 @@ const { matchIntent, calcCommentScore } = require('./match');
 const database = require('./database');
 const notifier = require('./notifier');
 const { getLogger } = require('./logger');
-const { classifyUrl, extractAwemeId } = require('./interceptor');
 
 const logger = getLogger('SearchEngine');
 
-/** 搜索状态 */
 let searchRunning = false;
 let searchPaused = false;
-let searchCallback = null;
 let logCallback = null;
 
-/**
- * 启动搜索
- * @param {Object} params - 搜索参数
- * @param {Function} onLog - 日志回调
- * @param {Function} onResult - 结果回调
- */
 async function startSearch(params, onLog, onResult) {
   if (searchRunning) return;
-
   searchRunning = true;
   searchPaused = false;
   logCallback = onLog;
-  searchCallback = onResult;
 
   log('搜索任务启动...');
 
@@ -44,7 +32,6 @@ async function startSearch(params, onLog, onResult) {
       return;
     }
 
-    // 检查登录状态
     await ensureLogin(view);
 
     const keywords = params.keywords || [];
@@ -57,19 +44,18 @@ async function startSearch(params, onLog, onResult) {
       const kw = keywords[kwIdx];
       log(`[${kwIdx + 1}/${keywords.length}] 搜索关键词: ${kw}`);
 
-      // 导航到搜索页
-      await navigateToSearch(view, kw);
-      await sleep(3000, 5000);
+      // 模拟键盘输入搜索关键词并回车
+      await typeAndSearch(view, kw);
+      await sleep(5000, 7000);
 
-      // 切换到视频标签
-      await switchToVideoTab(view);
+      // 模拟点击视频标签
+      await clickByText(view, '视频');
       await sleep(2000, 3000);
 
       // 扫描视频列表
       const videos = await scanVideos(view);
       log(`发现 ${videos.length} 个视频`);
 
-      // 处理每个视频
       const maxVideos = params.maxVideos || 10;
       const cutoffTs = Math.floor(Date.now() / 1000) - (params.commentHours || 60) * 60;
 
@@ -79,13 +65,20 @@ async function startSearch(params, onLog, onResult) {
         const video = videos[i];
         log(`[${i + 1}/${Math.min(videos.length, maxVideos)}] 处理视频 ${video.aid}`);
 
+        // 模拟鼠标点击视频卡片（不使用 loadURL）
+        const clicked = await clickVideoById(view, video.aid);
+        if (!clicked) {
+          log('  未定位到视频，跳过');
+          continue;
+        }
+        await sleep(3000, 5000);
+
         const result = await processVideo(view, video.aid, params.maxComments || 200, cutoffTs, onResult);
         if (result) {
           totalComments += result.total;
           totalMatched += result.matched;
         }
 
-        // 随机暂停模拟浏览
         await sleep(5000, 15000);
       }
     }
@@ -99,26 +92,17 @@ async function startSearch(params, onLog, onResult) {
   }
 }
 
-/**
- * 停止搜索
- */
 function stopSearch() {
   searchRunning = false;
   searchPaused = false;
   log('搜索已停止');
 }
 
-/**
- * 暂停/恢复搜索
- */
 function pauseSearch() {
   searchPaused = !searchPaused;
   log(searchPaused ? '搜索已暂停' : '搜索已恢复');
 }
 
-/**
- * 确保已登录抖音
- */
 async function ensureLogin(view) {
   try {
     const body = await view.webContents.executeJavaScript(
@@ -126,7 +110,6 @@ async function ensureLogin(view) {
     );
     if (body.includes('登录') && body.length < 100) {
       log('请在浏览器中登录抖音...');
-      // 等待用户登录（最多 5 分钟）
       for (let i = 0; i < 100; i++) {
         await sleep(3000);
         if (!searchRunning) return;
@@ -143,29 +126,51 @@ async function ensureLogin(view) {
 }
 
 /**
- * 导航到搜索页
+ * 模拟键盘输入搜索关键词并回车（不使用 loadURL）
  */
-async function navigateToSearch(view, keyword) {
+async function typeAndSearch(view, keyword) {
   try {
-    const url = `https://www.douyin.com/search/${encodeURIComponent(keyword)}?type=video`;
-    await view.webContents.loadURL(url);
+    // 先点击搜索框
+    await view.webContents.executeJavaScript(`
+      (function() {
+        const input = document.querySelector('[data-e2e="searchbar-input"], input[placeholder*="搜索"]');
+        if (input) { input.focus(); input.click(); }
+      })()
+    `);
+    await sleep(500, 1000);
+
+    // 模拟键盘输入：全选 → 删除 → 逐字输入
+    await sendKey(view, 'a', 'ctrl');
+    await sleep(100, 200);
+    await sendKey(view, 'Backspace');
+    await sleep(200, 400);
+
+    for (const ch of keyword) {
+      if (!searchRunning) return;
+      await sendChar(view, ch);
+      await sleep(50, 150);
+    }
+    await sleep(500, 1000);
+
+    // 模拟回车搜索
+    await sendKey(view, 'Enter');
   } catch (e) {
-    log(`导航失败: ${e.message}`);
+    log(`输入搜索失败: ${e.message}`);
   }
 }
 
 /**
- * 切换到视频标签
+ * 模拟点击文本匹配的元素
  */
-async function switchToVideoTab(view) {
+async function clickByText(view, text) {
   try {
     await view.webContents.executeJavaScript(`
       (function() {
         for (const el of document.querySelectorAll('*')) {
           const t = (el.innerText || '').trim();
-          if (t === '视频') {
+          if (t === '${text}') {
             const r = el.getBoundingClientRect();
-            if (r.width > 10 && r.height > 10 && r.height < 50 && r.y < 150) {
+            if (r.width > 10 && r.height > 10 && r.height < 50 && r.y < 200) {
               el.click();
               return true;
             }
@@ -178,9 +183,33 @@ async function switchToVideoTab(view) {
 }
 
 /**
- * 扫描页面上的视频列表
- * @returns {Array<{aid: string}>} 视频 ID 列表
+ * 模拟鼠标点击指定视频（通过坐标）
  */
+async function clickVideoById(view, aid) {
+  try {
+    return await view.webContents.executeJavaScript(`
+      (function() {
+        const links = document.querySelectorAll('a[href*="/video/${aid}"]');
+        for (const a of links) {
+          const r = a.getBoundingClientRect();
+          if (r.width > 50 && r.height > 50) {
+            a.scrollIntoView({ block: 'center' });
+            const evt = new MouseEvent('click', {
+              bubbles: true, cancelable: true, view: window,
+              clientX: r.x + r.width / 2, clientY: r.y + r.height / 2
+            });
+            a.dispatchEvent(evt);
+            return true;
+          }
+        }
+        return false;
+      })()
+    `);
+  } catch (e) {
+    return false;
+  }
+}
+
 async function scanVideos(view) {
   try {
     return await view.webContents.executeJavaScript(`
@@ -203,24 +232,15 @@ async function scanVideos(view) {
   }
 }
 
-/**
- * 处理单个视频：打开、滚动评论、提取评论、匹配意向
- */
 async function processVideo(view, aid, maxComments, cutoffTs, onResult) {
   try {
-    // 导航到视频页
-    await view.webContents.loadURL(`https://www.douyin.com/video/${aid}`);
-    await sleep(3000, 5000);
-
-    // 打开评论区
-    await view.webContents.sendInputEvent('char', { text: 'x' });
+    // 模拟按 x 打开评论区（键盘模拟）
+    await sendChar(view, 'x');
     await sleep(3000, 4000);
 
-    // 滚动加载评论
     const comments = await scrollAndCollectComments(view, aid, maxComments, cutoffTs);
     log(`  收集到 ${comments.length} 条评论`);
 
-    // 匹配意向关键词
     const cfg = require('./config').loadConfig();
     let matched = 0;
 
@@ -255,31 +275,23 @@ async function processVideo(view, aid, maxComments, cutoffTs, onResult) {
         };
 
         if (onResult) onResult(resultData);
-
-        // 异步发送通知
         notifier.notify(resultData);
-
         log(`    [命中] ${c.nickname}: ${c.text.slice(0, 30)} -> ${keywords.join(',')}`);
       }
     }
 
-    // ESC 退出视频
-    await view.webContents.sendInputEvent('key', { keyCode: 'Escape', code: 'Escape', key: 'Escape' });
+    // 模拟 ESC 退出（键盘模拟）
+    await sendKey(view, 'Escape');
     await sleep(2000, 3000);
 
     return { total: comments.length, matched };
   } catch (e) {
     log(`  处理视频异常: ${e.message}`);
-    try {
-      await view.webContents.sendInputEvent('key', { keyCode: 'Escape', code: 'Escape', key: 'Escape' });
-    } catch (e2) {}
+    try { await sendKey(view, 'Escape'); } catch (e2) {}
     return null;
   }
 }
 
-/**
- * 滚动加载并收集评论
- */
 async function scrollAndCollectComments(view, aid, maxComments, cutoffTs) {
   const allComments = [];
   const seenIds = new Set();
@@ -287,7 +299,6 @@ async function scrollAndCollectComments(view, aid, maxComments, cutoffTs) {
   for (let scroll = 0; scroll < 20; scroll++) {
     if (!searchRunning) break;
 
-    // 从 DOM 读取评论
     const domComments = await view.webContents.executeJavaScript(`
       (function() {
         const result = [];
@@ -328,7 +339,7 @@ async function scrollAndCollectComments(view, aid, maxComments, cutoffTs) {
 
     if (allComments.length >= maxComments) break;
 
-    // 滚动评论区
+    // 模拟鼠标滚动评论区
     await view.webContents.executeJavaScript(`
       (function() {
         const panel = document.querySelector('[data-e2e="comment-list"], [class*="comment-panel"]');
@@ -343,8 +354,24 @@ async function scrollAndCollectComments(view, aid, maxComments, cutoffTs) {
 }
 
 /**
- * 输出日志
+ * 模拟键盘按键（keydown + keyup）
  */
+async function sendKey(view, key, modifier) {
+  const mods = modifier ? [modifier] : [];
+  await view.webContents.sendInputEvent({ type: 'keyDown', key, keyCode: key, modifiers: mods });
+  await sleep(30, 80);
+  await view.webContents.sendInputEvent({ type: 'keyUp', key, keyCode: key, modifiers: mods });
+  await sleep(30, 80);
+}
+
+/**
+ * 模拟字符输入
+ */
+async function sendChar(view, char) {
+  await view.webContents.sendInputEvent({ type: 'char', char });
+  await sleep(10, 30);
+}
+
 function log(msg) {
   logger.info(msg);
   if (logCallback) logCallback(msg);
