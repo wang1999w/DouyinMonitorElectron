@@ -13,31 +13,29 @@ const BACKUP_DIR = path.join(__dirname, '..', 'config_backups');
 
 /** 默认配置 */
 const DEFAULT_CONFIG = {
+  // 搜索关键词（设置面板管理，搜索模块使用）
   search_intent_keywords: ['咨询', '多少钱', '价格', '了解', '想了解', '推荐'],
   search_garbage_keywords: ['666', '关注', '互粉', '点赞', '好看'],
-  monitor_intent_keywords: ['咨询', '多少钱', '价格', '了解', '想了解', '推荐'],
-  monitor_garbage_keywords: ['666', '关注', '互粉', '点赞', '好看'],
-  request_delay: 3,
+  // 监控博主列表（每个博主有独立的 intent/garbage keywords + time_ranges）
   monitor_bloggers: [],
-  search_schedule: {
-    enable: false,
-    interval: 30,
-    unit: 60,
-    hours: '08:00-22:00'
-  },
-  email: {
-    enable: false,
-    smtp_server: 'smtp.qq.com',
-    smtp_port: 465,
-    sender: '',
-    auth_code: '',
-    receivers: ''
-  },
-  wechat: {
-    enable: false,
-    webhook_url: ''
-  }
+  // 搜索定时任务
+  search_schedule: { enable: false, interval: 30, unit: 60, hours: '08:00-22:00' },
+  email: { enable: false, smtp_server: 'smtp.qq.com', smtp_port: 465, sender: '', auth_code: '', receivers: '' },
+  wechat: { enable: false, webhook_url: '' }
 };
+
+/**
+ * 博主配置模板
+ * {
+ *   sec_uid: string,          // 博主主页 ID
+ *   nickname: string,         // 博主昵称
+ *   time_ranges: string[],    // 监控时段 ["09:00-09:40"]
+ *   intent_keywords: string[],// 该博主的意向关键词（独立于搜索）
+ *   garbage_keywords: string[],// 该博主的垃圾关键词
+ *   date_value: number,       // 作品日期筛选（天）
+ *   status: number            // 1=启用 0=暂停
+ * }
+ */
 
 /**
  * 加载配置文件

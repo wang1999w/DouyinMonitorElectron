@@ -51,6 +51,7 @@
           <div class="ctrl-group">
             <label>搜索关键词（每行一个）：</label>
             <textarea id="search-keywords" rows="3" placeholder="输入关键词..."></textarea>
+            <div style="font-size:10px;color:#999;">匹配关键词在"设置"面板配置</div>
           </div>
           <div class="ctrl-row">
             <label><input type="checkbox" id="search-add-hash" checked> 自动加 #</label>
@@ -128,14 +129,8 @@
             <button id="btn-monitor-start" class="btn-primary">启动监控</button>
             <button id="btn-monitor-stop" class="btn-danger" disabled>停止监控</button>
           </div>
+          <div style="font-size:11px;color:#999;margin-bottom:6px;">每个博主独立配置意向/垃圾关键词，在"添加博主"中设置。时段节点触发时自动执行，搜索任务会自动暂停让路。</div>
           <div id="blogger-list"></div>
-          <div id="monitor-keywords">
-            <label>意向关键词（每行一个）：</label>
-            <textarea id="monitor-intent-kw" rows="3"></textarea>
-            <label>垃圾关键词（每行一个）：</label>
-            <textarea id="monitor-garbage-kw" rows="2"></textarea>
-            <button id="btn-save-monitor-kw" class="btn-secondary">保存关键词</button>
-          </div>
         </div>
         <div id="monitor-results"></div>
       </div>

@@ -64,6 +64,14 @@ app.whenReady().then(() => {
   registerProtocolHandlers();
   initApp();
 
+  // 启动全局任务调度器
+  const scheduler = require('../core/scheduler');
+  scheduler.init((msg) => {
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('search-log', msg);
+    }
+  });
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) initApp();
   });

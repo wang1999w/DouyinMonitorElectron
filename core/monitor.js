@@ -1,7 +1,8 @@
 /**
  * 博主监控引擎
- * 从 Python core/monitor_engine.py 迁移
- * 全部使用鼠标模拟和键盘模拟，不使用 loadURL 跳转，降低风控
+ * 每个博主独立配置意向/垃圾关键词
+ * 支持调度器通过 executeSingleBlogger 调用
+ * 全部使用鼠标/键盘模拟
  */
 
 const { getDouyinView } = require('../main/window');
@@ -14,59 +15,45 @@ const { getLogger } = require('./logger');
 const logger = getLogger('MonitorEngine');
 
 let monitorRunning = false;
-let monitorTimer = null;
 let logCallback = null;
 
 function startMonitor(onLog) {
   if (monitorRunning) return;
   monitorRunning = true;
   logCallback = onLog;
-  log('监控已启动');
-  runCheck();
-  monitorTimer = setInterval(() => {
-    if (monitorRunning) runCheck();
-  }, 60000);
+  log('监控已启动（手动模式）');
 }
 
 function stopMonitor() {
   monitorRunning = false;
-  if (monitorTimer) { clearInterval(monitorTimer); monitorTimer = null; }
   log('监控已停止');
 }
 
-async function runCheck() {
-  try {
-    const cfg = config.loadConfig();
-    const bloggers = (cfg.monitor_bloggers || []).filter(b => b.status === 1);
-    if (bloggers.length === 0) { log('无活跃监控博主，等待...'); return; }
-    for (const blogger of bloggers) {
-      if (!monitorRunning) break;
-      await processBlogger(blogger, cfg);
-    }
-    log('本轮监控完成');
-  } catch (e) {
-    log(`监控异常: ${e.message}`);
-  }
-}
+/**
+ * 执行单个博主的监控（由调度器调用）
+ * @param {Object} blogger - 博主配置（含独立的 intent/garbage keywords）
+ * @param {Object} cfg - 全局配置
+ * @param {Function} onLog - 日志回调
+ */
+async function executeSingleBlogger(blogger, cfg, onLog) {
+  const savedCb = logCallback;
+  if (onLog) logCallback = onLog;
 
-async function processBlogger(blogger, cfg) {
   const nickname = blogger.nickname || '未知博主';
   const secUid = blogger.sec_uid || '';
 
-  if (!isInSchedule(blogger.time_ranges || [])) return;
   log(`监控博主: ${nickname}`);
 
   const view = getDouyinView();
   if (!view || !view.webContents) { log('浏览器未就绪'); return; }
 
   try {
-    // 模拟键盘操作导航到博主主页（通过地址栏输入）
+    // 通过地址栏导航（键盘模拟）
     await navigateByUrl(view, `https://www.douyin.com/user/${secUid}`);
     await sleep(3000, 5000);
 
     // 滚动获取视频列表
     for (let i = 0; i < 5; i++) {
-      if (!monitorRunning) break;
       await view.webContents.executeJavaScript('window.scrollBy(0, 400)');
       await sleep(1000, 2000);
     }
@@ -75,54 +62,38 @@ async function processBlogger(blogger, cfg) {
     log(`  发现 ${videos.length} 个视频`);
 
     const cutoffTs = Math.floor(Date.now() / 1000) - 24 * 3600;
+
     for (const video of videos) {
       if (!monitorRunning) break;
-      await processVideoComments(view, video.aid, cfg, nickname, cutoffTs);
+      await processVideoComments(view, video.aid, blogger, cutoffTs);
     }
+
     log(`博主 ${nickname} 监控完成`);
   } catch (e) {
     log(`监控博主异常: ${e.message}`);
+  } finally {
+    logCallback = savedCb;
   }
 }
 
 /**
- * 模拟通过地址栏导航（键盘模拟 Ctrl+L → 输入 URL → 回车）
+ * 通过地址栏导航（键盘模拟：Ctrl+L → 输入 URL → 回车）
  */
 async function navigateByUrl(view, url) {
   try {
-    await sendKey(view, 'l', 'ctrl');
+    await sendKey(view, 'l', ['ctrl']);
     await sleep(200, 400);
-    // 清空地址栏
-    await sendKey(view, 'a', 'ctrl');
+    await sendKey(view, 'a', ['ctrl']);
     await sleep(50, 100);
     await sendKey(view, 'Backspace');
     await sleep(100, 200);
-    // 逐字输入 URL
     for (const ch of url) {
-      if (!monitorRunning) return;
       await sendChar(view, ch);
-      await sleep(10, 30);
+      await sleep(10, 25);
     }
     await sleep(200, 400);
     await sendKey(view, 'Enter');
-  } catch (e) {
-    log(`导航失败: ${e.message}`);
-  }
-}
-
-function isInSchedule(timeRanges) {
-  if (!timeRanges || timeRanges.length === 0) return true;
-  const now = new Date();
-  const nowMin = now.getHours() * 60 + now.getMinutes();
-  for (const tr of timeRanges) {
-    try {
-      const [start, end] = tr.split('-');
-      const [sh, sm] = start.split(':').map(Number);
-      const [eh, em] = end.split(':').map(Number);
-      if (nowMin >= sh * 60 + sm && nowMin <= eh * 60 + em) return true;
-    } catch (e) { continue; }
-  }
-  return false;
+  } catch (e) { log(`导航失败: ${e.message}`); }
 }
 
 async function scanBloggerVideos(view) {
@@ -145,9 +116,8 @@ async function scanBloggerVideos(view) {
   } catch (e) { return []; }
 }
 
-async function processVideoComments(view, aid, cfg, bloggerNickname, cutoffTs) {
+async function processVideoComments(view, aid, blogger, cutoffTs) {
   try {
-    // 模拟鼠标点击视频（不使用 loadURL）
     const clicked = await view.webContents.executeJavaScript(`
       (function() {
         const links = document.querySelectorAll('a[href*="/video/${aid}"]');
@@ -165,23 +135,14 @@ async function processVideoComments(view, aid, cfg, bloggerNickname, cutoffTs) {
     if (!clicked) return;
     await sleep(3000, 5000);
 
-    // 模拟键盘打开评论区
     await sendChar(view, 'x');
     await sleep(2000, 3000);
 
-    // 滚动加载评论
     for (let scroll = 0; scroll < 20; scroll++) {
-      if (!monitorRunning) break;
-      await view.webContents.executeJavaScript(`
-        (function() {
-          const panel = document.querySelector('[data-e2e="comment-list"], [class*="comment-panel"]');
-          if (panel) panel.scrollBy(0, 150);
-        })()
-      `);
+      await view.webContents.executeJavaScript(`(function(){ const p=document.querySelector('[data-e2e="comment-list"],[class*="comment-panel"]'); if(p) p.scrollBy(0,150); })()`);
       await sleep(500, 1000);
     }
 
-    // 读取评论
     const comments = await view.webContents.executeJavaScript(`
       (function() {
         const result = [];
@@ -191,8 +152,7 @@ async function processVideoComments(view, aid, cfg, bloggerNickname, cutoffTs) {
         for (const item of items) {
           let best = '';
           let nick = '';
-          const allEls = item.querySelectorAll('p, span, div');
-          for (const el of allEls) {
+          for (const el of item.querySelectorAll('p, span, div')) {
             const t = (el.innerText || '').trim();
             if (!t || t.length < 3 || t.length > 500 || SKIP.has(t)) continue;
             if (t.length > best.length) best = t;
@@ -207,23 +167,25 @@ async function processVideoComments(view, aid, cfg, bloggerNickname, cutoffTs) {
       })()
     `);
 
+    // 使用博主独立的关键词进行匹配
+    const intentKw = blogger.intent_keywords || [];
+    const garbageKw = blogger.garbage_keywords || [];
+
     for (const c of comments) {
-      if (!monitorRunning) break;
-      const [ok, keywords, isGarbage] = matchIntent(c.text, cfg.monitor_intent_keywords || [], cfg.monitor_garbage_keywords || []);
+      const [ok, keywords, isGarbage] = matchIntent(c.text, intentKw, garbageKw);
       if (ok && !isGarbage) {
         c.aweme_id = aid;
         c.matched_keywords = keywords;
         c.video_url = `https://www.douyin.com/video/${aid}`;
         c.score = calcCommentScore(c.create_time);
-        c.video_author = bloggerNickname;
+        c.video_author = blogger.nickname || '';
         database.addIntentComment(c);
-        const resultData = { nickname: c.nickname || '', comment_text: c.text, matched_keywords: keywords.join(','), video_author: bloggerNickname, score: c.score };
+        const resultData = { nickname: c.nickname || '', comment_text: c.text, matched_keywords: keywords.join(','), video_author: blogger.nickname || '', score: c.score };
         notifier.notify(resultData);
         log(`    [命中] ${c.nickname}: ${c.text.slice(0, 30)} -> ${keywords.join(',')}`);
       }
     }
 
-    // 模拟 ESC 退出
     await sendKey(view, 'Escape');
     await sleep(1000, 2000);
   } catch (e) {
@@ -231,17 +193,17 @@ async function processVideoComments(view, aid, cfg, bloggerNickname, cutoffTs) {
   }
 }
 
-async function sendKey(view, key, modifier) {
-  const mods = modifier ? [modifier] : [];
+async function sendKey(view, key, modifiers) {
+  const mods = modifiers || [];
   await view.webContents.sendInputEvent({ type: 'keyDown', key, keyCode: key, modifiers: mods });
-  await sleep(30, 80);
+  await sleep(30, 60);
   await view.webContents.sendInputEvent({ type: 'keyUp', key, keyCode: key, modifiers: mods });
-  await sleep(30, 80);
+  await sleep(30, 60);
 }
 
 async function sendChar(view, char) {
   await view.webContents.sendInputEvent({ type: 'char', char });
-  await sleep(10, 30);
+  await sleep(8, 20);
 }
 
 function log(msg) {
@@ -254,4 +216,4 @@ function sleep(min, max) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-module.exports = { startMonitor, stopMonitor };
+module.exports = { startMonitor, stopMonitor, executeSingleBlogger };
