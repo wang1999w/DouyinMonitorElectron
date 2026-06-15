@@ -1,13 +1,6 @@
 /**
- * 视频处理流程（重构版 - 基于 laizan 项目学习）
- *
- * 核心改进：
- *   1. 键盘 ArrowDown 导航到下一个视频（不用鼠标点击链接）
- *   2. waitForSelector 替代固定 sleep
- *   3. #videoSideCard 检测评论区
- *   4. 键盘 x 打开评论区 + 评论按钮双保险
- *   5. 验证码用 .second-verify-panel 检测
- *   6. 进度回调驱动，不依赖日志文本
+ * 视频处理流程
+ * 每步操作都有日志，评论检测用多种选择器
  */
 
 const dom = require('./domUtils');
@@ -18,95 +11,90 @@ const { getLogger } = require('./logger');
 const logger = getLogger('VideoProcessor');
 
 async function processVideo(ctx) {
-  const { view, aid, keywords, cdp, shouldContinue, onProgress, onResult, cutoffTs = 0 } = ctx;
+  const { view, aid, keywords, cdp, shouldContinue, onResult, cutoffTs = 0 } = ctx;
   const wc = view.webContents;
   const videoInfo = ctx.videoInfo || { aweme_id: aid, desc: '', author: '', video_url: `https://www.douyin.com/video/${aid}` };
   const result = { matched: 0, cdp: 0, dom: 0, effective: 0, skipped: '' };
 
-  const report = (info) => { if (onProgress) try { onProgress(info); } catch (_) {} };
   const check = () => shouldContinue ? shouldContinue() : true;
 
   try {
-    // 步骤1：点击视频卡片（从搜索结果列表打开）
-    report({ phase: 'click', awemeId: aid });
+    // 1. 点击视频卡片
+    log('  🖱 点击视频...');
     const clicked = await dom.clickVideoById(view, aid);
-    if (!clicked) {
-      result.skipped = 'video_not_found';
-      log('    视频未找到');
-      report({ phase: 'skip', awemeId: aid, reason: '视频未找到' });
-      return result;
-    }
+    if (!clicked) { result.skipped = 'not_found'; log('  ❌ 视频未找到'); return result; }
 
-    // 步骤2：等待视频加载
-    report({ phase: 'load', awemeId: aid });
-    await sleep(5000, 8000);
-    if (!check()) return result;
+    // 2. 等待加载
+    log('  ⏳ 等待视频加载...');
+    if (!await interruptibleSleep(5000, 8000)) return result;
 
-    // 步骤3：模拟观看
-    report({ phase: 'watch', awemeId: aid });
+    // 3. 模拟观看
+    log('  👁 模拟观看...');
     await human.mouseMove(wc, rand(300, 700), rand(200, 400));
-    await sleep(3000, 5000);
-    report({ phase: 'checkComment', awemeId: aid });
+    if (!await interruptibleSleep(3000, 5000)) return result;
+
+    // 4. 检查评论数
+    log('  📊 检查评论数...');
     const commentCount = await dom.getCommentCount(view);
     if (commentCount === 0) {
       result.skipped = 'no_comments';
-      log('    无评论（抢首评），跳过');
-      report({ phase: 'skip', awemeId: aid, reason: '无评论' });
+      log('  ⏭ 无评论（抢首评），跳过');
+      await closeAndEscape(wc);
       return result;
     }
-    log(`    评论数: ${commentCount === -1 ? '未知' : commentCount}`);
+    log(`  评论数: ${commentCount === -1 ? '未知' : commentCount}`);
 
-    // 步骤4：打开评论区（laizan 方式：x 键 + 检查 #videoSideCard）
-    report({ phase: 'openComment', awemeId: aid });
+    // 5. 打开评论区
+    log('  💬 打开评论区...');
     await human.keyPress(wc, 'x');
-    await sleep(3000, 5000);
+    if (!await interruptibleSleep(3000, 5000)) return result;
 
-    // 检查评论区是否打开
+    // 检查评论区（多种选择器）
     let commentOpen = await dom.isCommentOpen(view);
     if (!commentOpen) {
-      log('    评论区未打开，再按一次 x');
+      log('  评论区未打开，再按x...');
       await human.keyPress(wc, 'x');
-      await sleep(3000, 5000);
+      if (!await interruptibleSleep(3000, 5000)) return result;
       commentOpen = await dom.isCommentOpen(view);
     }
 
     if (!commentOpen) {
       // 尝试点击评论按钮
-      const commentBtn = await execJS(wc, `(function(){
-        const el = document.querySelector('[data-e2e="feed-active-video"] [data-e2e="feed-comment-icon"]');
-        if (el) { const r = el.getBoundingClientRect(); return { x: r.x+r.width/2, y: r.y+r.height/2 }; }
+      const btn = await js(wc, `(function(){
+        const el=document.querySelector('[data-e2e="feed-active-video"] [data-e2e="feed-comment-icon"],[class*="comment-icon"]');
+        if(el){const r=el.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};}
         return null;
       })()`);
-      if (commentBtn) {
-        await human.mouseClick(wc, commentBtn.x, commentBtn.y);
-        await sleep(2000, 3000);
+      if (btn) {
+        await human.mouseClick(wc, btn.x, btn.y);
+        if (!await interruptibleSleep(2000, 3000)) return result;
         commentOpen = await dom.isCommentOpen(view);
       }
     }
 
     if (!commentOpen) {
-      result.skipped = 'comment_panel_missing';
-      log('    评论区未出现');
-      report({ phase: 'skip', awemeId: aid, reason: '评论区未出现' });
+      result.skipped = 'no_comment_panel';
+      log('  ❌ 评论区未打开');
+      await closeAndEscape(wc);
       return result;
     }
+    log('  ✓ 评论区已打开');
 
     if (!check()) return result;
 
-    // 步骤5：滚动加载评论
-    report({ phase: 'scroll', awemeId: aid });
+    // 6. 滚动加载评论
+    log('  📜 滚动加载评论...');
     await dom.scrollCommentPanel(view, 12, 150);
     if (!check()) return result;
 
-    // 步骤6：采集评论
-    report({ phase: 'collect', awemeId: aid });
+    // 7. 采集评论
+    log('  📥 采集评论...');
     if (cdp) cdp.beginCollect(aid);
     const cdpComments = cdp ? cdp.getComments(aid) : [];
     const domComments = await dom.readDomComments(view);
     const domOnly = domComments.filter(d => !cdpComments.some(c => c.text === d.text));
     let allComments = [...cdpComments, ...domOnly];
 
-    // 补充视频信息
     if (cdp?.currentVideo?.aweme_id === aid) {
       videoInfo.desc = videoInfo.desc || cdp.currentVideo.desc || '';
       videoInfo.author = videoInfo.author || cdp.currentVideo.author || '';
@@ -116,54 +104,55 @@ async function processVideo(ctx) {
     if (cutoffTs > 0) {
       const before = allComments.length;
       allComments = allComments.filter(c => (c.create_time || 0) >= cutoffTs);
-      if (before > allComments.length) log(`    时效过滤: 排除${before - allComments.length}条`);
+      if (before > allComments.length) log(`  时效过滤: 排除${before - allComments.length}条`);
     }
 
     result.cdp = cdpComments.length;
     result.dom = domComments.length;
     result.effective = allComments.length;
+    log(`  CDP:${cdpComments.length} DOM:${domComments.length} 有效:${allComments.length}`);
 
-    // 步骤7：匹配入库
-    report({ phase: 'match', awemeId: aid, cdpCount: result.cdp, domCount: result.dom });
+    // 8. 匹配入库
+    let matched = 0;
     for (const c of allComments) {
       if (!check()) break;
       const r = pipeline.processComment(c, null, videoInfo, keywords);
-      if (r) {
-        result.matched++;
-        if (onResult) onResult(r);
-      }
+      if (r) { matched++; if (onResult) onResult(r); }
     }
+    result.matched = matched;
+    log(`  🎯 命中: ${matched}条`);
 
-    // 步骤8：退出视频（laizan 方式：先关评论区，再 ESC）
+    // 9. 退出
     if (cdp) cdp.endCollect(aid);
-    if (commentOpen) {
-      await human.keyPress(wc, 'x');
-      await sleep(500, 1000);
-    }
-    await human.keyPress(wc, 'Escape');
-    await sleep(1500, 2500);
+    await closeAndEscape(wc);
 
-    report({ phase: 'done', awemeId: aid, cdpCount: result.cdp, domCount: result.dom, matchCount: result.matched });
     return result;
   } catch (e) {
     result.skipped = 'exception';
-    if (cdp) try { cdp.endCollect(aid); } catch (_) {}
-    try { await human.keyPress(wc, 'Escape'); } catch (_) {}
-    report({ phase: 'error', awemeId: aid, error: e.message });
-    log(`    异常: ${e.message}`);
+    if (cdp) try { cdp.endCollect(aid); } catch(_) {}
+    try { await closeAndEscape(wc); } catch(_) {}
+    log(`  ❌ 异常: ${e.message}`);
     return result;
   }
 }
 
-async function execJS(wc, script) {
-  try { return await wc.executeJavaScript(script); } catch (_) { return null; }
+async function closeAndEscape(wc) {
+  try { await human.keyPress(wc, 'x'); await sleep(500, 1000); } catch(_) {}
+  try { await human.keyPress(wc, 'Escape'); await sleep(1500, 2500); } catch(_) {}
 }
 
+async function interruptibleSleep(ms) {
+  const step = 500;
+  for (let t = 0; t < ms; t += step) {
+    if (!require('./search').isRunning()) return false;
+    await sleep(step);
+  }
+  return true;
+}
+
+async function js(wc, s) { try { return await wc.executeJavaScript(s); } catch(_) { return null; } }
 function log(msg) { logger.info(msg); }
-
-function sleep(min, max) {
-  const ms = max ? Math.floor(Math.random() * (max - min) + min) : min;
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+function sleep(a, b) { const ms = b ? rand(a,b) : a; return new Promise(r => setTimeout(r, ms)); }
+function rand(a, b) { return Math.floor(Math.random()*(b-a)+a); }
 
 module.exports = { processVideo };
