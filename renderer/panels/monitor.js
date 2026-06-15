@@ -104,7 +104,10 @@
             <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">评论时效 <span style="color:#999;">（只采集这个时间内的评论）</span></label>
             <div style="display:flex;align-items:center;gap:6px;">
               <input type="number" id="bm-comment-hours" value="60" min="1" max="1440" style="width:60px;padding:5px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
-              <span style="font-size:12px;color:#666;">分钟内</span>
+              <select id="bm-comment-unit" style="padding:5px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+                <option value="1">分钟</option>
+                <option value="60">小时</option>
+              </select>
             </div>
           </div>
           <div style="flex:1;">
@@ -148,7 +151,7 @@
       const intentStr = document.getElementById('bm-intent-kw').value.trim();
       const garbageStr = document.getElementById('bm-garbage-kw').value.trim();
       const days = parseInt(document.getElementById('bm-days').value) || 7;
-      const commentHours = parseInt(document.getElementById('bm-comment-hours').value) || 60;
+      const commentHours = (parseInt(document.getElementById('bm-comment-hours').value) || 60) * (parseInt(document.getElementById('bm-comment-unit').value) || 1);
 
       if (!secUid) { alert('请填写博主 sec_uid'); return; }
       if (!timesStr) { alert('请至少填写一个触发时间点'); return; }

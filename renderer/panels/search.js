@@ -51,7 +51,9 @@
 
     if (currentMode === 'quantity') {
       // 数量模式：读取所有筛选参数
-      const commentHours = parseInt(document.getElementById('search-ch')?.value) || 60;
+      const chVal = parseInt(document.getElementById('search-ch')?.value) || 60;
+      const chUnit = parseInt(document.getElementById('search-ch-unit')?.value) || 1;
+      const commentHours = chVal * chUnit; // 分钟或小时转换为分钟
       params = {
         ...params,
         days: parseInt(document.querySelector('input[name="search-time"]:checked')?.value) || 0,
