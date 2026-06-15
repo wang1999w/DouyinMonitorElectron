@@ -1,43 +1,44 @@
 /**
- * 执行搜索（稳定版）
- * 导航用 loadURL（可靠），验证只读 URL（不重新加载）
+ * 搜索引擎（严格遵循老版本流程编排）
+ *
+ * 老版本流程（Python Playwright）：
+ *   1. 导航到抖音首页 → 检查登录
+ *   2. 输入关键词 → 点击搜索按钮 → 等待5-7秒
+ *   3. 检查异常（验证码）→ 切换视频标签 → 应用筛选
+ *   4. 循环：扫描视频列表 → 过滤已处理 → 悬停预览 → 点击打开 → 模拟观看8-20秒
+ *   5. 按x打开评论区 → 检查是否打开 → 滚动加载评论
+ *   6. API拦截 + DOM采集 → 关键词匹配 → 入库
+ *   7. ESC退出 → 随机暂停15-60秒 → 模拟浏览列表 → 下一个视频
+ *
+ * Electron 适配：
+ *   - loadURL 替代 page.goto（更稳定）
+ *   - executeJavaScript 替代 page.evaluate
+ *   - sendInputEvent 替代 page.keyboard.press
+ *   - humanBehavior 模拟鼠标/键盘
+ *   - CDP 拦截替代 Playwright response 事件
  */
-async function executeSearch(view, keyword, task) {
-  const wc = view.webContents;
 
-  // 直接导航到搜索页（loadURL 比操作 DOM 更可靠）
-  const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(keyword)}?type=video`;
-  log(`  导航到: ${keyword}`);
-  try {
-    await wc.loadURL(searchUrl);
-  } catch (e) {
-    log(`  ❌ 导航失败: ${e.message}`);
-    return false;
-  }
+const { getDouyinView, getCDPInterceptor } = require('../main/window');
+const human = require('./humanBehavior');
+const dom = require('./domUtils');
+const videoProcessor = require('./videoProcessor');
+const scheduler = require('./scheduler');
+const { getLogger } = require('./logger');
 
-  // 等待页面加载
-  await dom.sleep(5000, 7000);
+const logger = getLogger('SearchEngine');
 
-  // 验证：只读当前 URL，不重新加载
-  const currentUrl = await execJS(wc, 'location.href') || '';
-  const currentTitle = await execJS(wc, 'document.title') || '';
-  const isSearch = currentUrl.includes('search') || currentTitle.includes('搜索');
-  log(`  验证: URL=${currentUrl.substring(0, 60)}`);
-  log(`  验证: 标题=${currentTitle}`);
-  log(`  验证: ${isSearch ? '✓ 已到搜索页' : '✗ 未到搜索页'}`);
+let searchRunning = false;
+let searchPaused = false;
+let logCallback = null;
+let progressCallback = null;
+let currentTask = null;
 
-  // 验证码检查
-  if (await dom.hasCaptcha(view)) {
-    log('  ⚠ 验证码，等待处理...');
-    notifyUser('验证码检测到，请手动完成');
-    for (let i = 0; i < 100; i++) {
-      await sleep(3000);
-      if (task.stopped) return false;
-      if (!(await dom.hasCaptcha(view))) { log('  ✓ 验证码已通过'); break; }
-    }
-  }
+function checkRunning() { return searchRunning; }
 
-  return isSearch;
+function stopSearch() {
+  if (currentTask) currentTask.stopped = true;
+  searchPaused = false;
+  log('搜索已停止');
 }
 
 function pauseSearch() {
@@ -49,25 +50,19 @@ function pauseSearch() {
 
 function isRunning() { return searchRunning; }
 
-// ========== 主流程 ==========
+// ========== 主流程（严格遵循老版本编排） ==========
 
 async function startSearch(params, onLog, onResult, onProgress) {
   if (searchRunning) { log('已有搜索任务在运行中'); return; }
-
   searchRunning = true;
   searchPaused = false;
   logCallback = onLog;
   progressCallback = onProgress || null;
 
   const task = {
-    params,
-    processedIds: new Set(),
-    stopped: false,
-    matchedTotal: 0,
-    cdpTotal: 0,
-    domTotal: 0,
-    videoIndex: 0,
-    videoTotal: 0
+    params, processedIds: new Set(), stopped: false,
+    matchedTotal: 0, cdpTotal: 0, domTotal: 0,
+    videoIndex: 0, videoTotal: 0
   };
   currentTask = task;
   scheduler.registerSearch(params);
@@ -80,28 +75,12 @@ async function startSearch(params, onLog, onResult, onProgress) {
     if (!view || !view.webContents) { log('浏览器未就绪'); return; }
     const wc = view.webContents;
 
-    // 检查登录
-    const loginBody = await execJS(wc, 'document.body.innerText.substring(0, 300)') || '';
-    if (loginBody.includes('登录') && loginBody.length < 100) {
-      log('请登录抖音...');
-      for (let i = 0; i < 120; i++) {
-        await sleep(3000);
-        if (task.stopped) return;
-        const b = await execJS(wc, 'document.body.innerText.substring(0, 300)') || '';
-        if (!b.includes('登录') || b.length > 100) { log('登录成功'); break; }
-      }
-    }
+    // === 步骤1：检查登录 ===
+    await checkLogin(view, task);
+    if (task.stopped) return;
 
-    // 检查验证码
-    if (await dom.hasCaptcha(view)) {
-      log('⚠ 验证码检测到，请手动完成...');
-      notifyUser('检测到验证码，请在左侧页面手动完成');
-      for (let i = 0; i < 100; i++) {
-        await sleep(3000);
-        if (task.stopped) return;
-        if (!(await dom.hasCaptcha(view))) { log('✅ 验证码已通过'); break; }
-      }
-    }
+    // === 步骤2：检查验证码 ===
+    await checkCaptchaLoop(view, task);
 
     const cfg = require('./config').loadConfig();
     const intentKw = cfg.search_intent_keywords || [];
@@ -109,96 +88,98 @@ async function startSearch(params, onLog, onResult, onProgress) {
     const keywords = params.keywords || [];
     const commentHours = params.commentHours || 60;
     const cutoffTs = Math.floor(Date.now() / 1000) - commentHours * 60;
-    log(`评论时效: ${commentHours}分钟内`);
-
     const cdp = getCDPInterceptor();
 
     for (let kwIdx = 0; kwIdx < keywords.length; kwIdx++) {
       if (task.stopped) break;
       const kw = keywords[kwIdx];
+
       log(`[${kwIdx + 1}/${keywords.length}] 搜索关键词: ${kw}`);
 
-      // 执行搜索
-      const searchOk = await executeSearch(view, kw, task);
-      if (!searchOk) { log('❌ 搜索失败'); continue; }
+      // === 步骤3：导航到搜索页（loadURL，稳定可靠） ===
+      const searchUrl = `https://www.douyin.com/search/${encodeURIComponent(kw)}?type=video`;
+      log(`  导航到搜索页...`);
+      await wc.loadURL(searchUrl);
+      await dom.sleep(5000, 7000);
 
-      // 切换视频标签
-      await clickByTextSafe(view, '视频');
-      await dom.sleep(2000, 3000);
+      // 验证：只读 URL，不重新加载
+      const url = await execJS(wc, 'location.href') || '';
+      log(`  当前URL: ${url.substring(0, 60)}`);
+      if (!url.includes('search')) {
+        log('  ❌ 未到搜索页，跳过');
+        continue;
+      }
 
-      // 筛选
+      // 检查验证码
+      await checkCaptchaLoop(view, task);
+
+      // === 步骤4：切换视频标签 ===
+      log('  切换到视频标签...');
+      const tabPos = await findTextPosition(view, '视频');
+      if (tabPos) {
+        await human.mouseClick(wc, tabPos.x, tabPos.y);
+        await dom.sleep(2000, 3000);
+        log('  ✓ 已切换到视频标签');
+      } else {
+        log('  ⚠ 未找到视频标签');
+      }
+
+      // === 步骤5：应用筛选（数量模式） ===
       if (isQuantityMode) {
         const hasFilter = params.sortMode !== 'default' || params.filterTime !== '0' || params.filterDuration !== '0';
         if (hasFilter) {
-          log('执行筛选...');
-          await applySortFilter(view, params);
+          log('  应用筛选...');
+          await applyFilter(view, params);
           await dom.sleep(2000, 3000);
         }
       }
 
-      // 处理视频
+      // === 步骤6：视频处理循环（老版本逻辑） ===
       const targetCount = isQuantityMode ? (params.maxVideos || 10) : Infinity;
       const startTime = Date.now();
       const maxDuration = isQuantityMode ? Infinity : (params.taskDuration || 30 * 60 * 1000);
+      let collectedCount = 0;
+      let consecutiveFailures = 0;
       let scrollAttempts = 0;
+      let videosSincePause = 0;
+      let pauseAfter = rand(1, 3);
 
-      while (!task.stopped && task.processedIds.size < targetCount) {
-        if (searchPaused) {
-          await waitWhilePaused(task);
-          if (task.stopped) break;
-        }
-        if (!isQuantityMode && Date.now() - startTime >= maxDuration) {
-          log('任务时间已到');
-          break;
-        }
+      while (!task.stopped && collectedCount < targetCount) {
+        if (searchPaused) { await waitWhilePaused(task); if (task.stopped) break; }
+        if (!isQuantityMode && Date.now() - startTime >= maxDuration) { log('任务时间已到'); break; }
 
-        // 扫描视频
-        const videos = await dom.scanVideoLinks(view);
-        if (videos.length === 0) {
-          log('页面无视频，滚动加载...');
-          await human.mouseScroll(wc, 'down', 3);
-          await dom.sleep(3000, 5000);
-          scrollAttempts++;
-          if (scrollAttempts > 10) { log('多次滚动无新视频，停止'); break; }
-          continue;
-        }
-
-        // 模拟浏览
-        await simulateBrowse(view, videos);
+        // 扫描视频列表
+        log(`扫描视频列表... (已采集${collectedCount}/${targetCount})`);
+        let videos = await dom.scanVideoLinks(view);
 
         // 过滤已处理
-        const unprocessed = videos.filter(v => !task.processedIds.has(v.aid));
+        let unprocessed = videos.filter(v => !task.processedIds.has(v.aid));
+
         if (unprocessed.length === 0) {
-          log(`全部${videos.length}个视频已处理，滚动加载...`);
+          log('无更多未处理视频，向下滚动...');
           await human.mouseScroll(wc, 'down', 3);
-          await dom.sleep(3000, 5000);
+          await dom.sleep(2000, 3000);
           scrollAttempts++;
           if (scrollAttempts > 10) { log('多次滚动无新视频，停止'); break; }
           continue;
         }
 
         scrollAttempts = 0;
-        log(`发现 ${unprocessed.length} 个未处理视频`);
 
-        const video = unprocessed[0];
-        task.processedIds.add(video.aid);
-        task.videoIndex = task.processedIds.size;
-        task.videoTotal = Math.max(task.videoTotal, task.videoIndex);
-        log(`[${task.videoIndex}/${targetCount === Infinity ? '∞' : targetCount}] 处理视频 ${video.aid}`);
+        // 随机打乱顺序（老版本逻辑）
+        unprocessed.sort(() => Math.random() - 0.5);
+        const v = unprocessed[0];
+        const aid = v.aid;
+        collectedCount++;
 
-        // 验证码检查
-        if (await dom.hasCaptcha(view)) {
-          log('⚠ 验证码检测到，等待处理...');
-          notifyUser('验证码检测到，请手动完成');
-          for (let i = 0; i < 100; i++) {
-            await sleep(3000);
-            if (task.stopped) break;
-            if (!(await dom.hasCaptcha(view))) { log('✅ 验证码已通过'); break; }
-          }
-        }
+        log(`\n====== [${collectedCount}/${targetCount}] 视频 ${aid} ======`);
 
-        const r = await videoProcessor.processVideo({
-          view, aid: video.aid,
+        // 检查验证码
+        await checkCaptchaLoop(view, task);
+
+        // 处理视频
+        const result = await videoProcessor.processVideo({
+          view, aid,
           keywords: { intent: intentKw, garbage: garbageKw },
           cdp,
           shouldContinue: () => !task.stopped && searchRunning,
@@ -207,12 +188,41 @@ async function startSearch(params, onLog, onResult, onProgress) {
           cutoffTs
         });
 
-        task.matchedTotal += r.matched;
-        task.cdpTotal += r.cdp;
-        task.domTotal += r.dom;
+        if (result.skipped) {
+          consecutiveFailures++;
+          if (consecutiveFailures >= 3) {
+            log('连续3次失败，检查异常...');
+            await checkCaptchaLoop(view, task);
+            consecutiveFailures = 0;
+          }
+          continue;
+        }
 
-        await dom.sleep(1000, 2000);
+        consecutiveFailures = 0;
+        task.processedIds.add(aid);
+        task.matchedTotal += result.matched;
+        task.cdpTotal += result.cdp;
+        task.domTotal += result.dom;
+
+        // 老版本：随机暂停模拟浏览
+        videosSincePause++;
+        if (videosSincePause >= pauseAfter) {
+          const pauseSec = rand(15, 60);
+          log(`\n⏸️ 随机暂停 ${pauseSec}秒，模拟浏览...`);
+          await human.mouseMove(wc, rand(400, 800), rand(300, 500));
+          await dom.sleep(pauseSec * 1000);
+          videosSincePause = 0;
+          pauseAfter = rand(1, 3);
+          if (task.stopped) break;
+        }
+
+        // 老版本：模拟浏览列表
+        await simulateBrowse(view);
+
+        log(`====== [${collectedCount}/${targetCount}] 完成 ======`);
       }
+
+      log(`关键词 [${kw}] 完成！`);
     }
 
     log(`搜索完成！共 ${task.matchedTotal} 条意向`);
@@ -227,148 +237,108 @@ async function startSearch(params, onLog, onResult, onProgress) {
   }
 }
 
-// ========== 搜索执行 ==========
+// ========== 辅助函数 ==========
 
-async function executeSearch(view, keyword, task) {
+async function checkLogin(view, task) {
   const wc = view.webContents;
-
-  // 步骤1：找搜索框（多策略）
-  const si = await dom.findSearchInput(view);
-  if (!si) {
-    log('❌ 搜索框未找到');
-    return false;
+  const body = await execJS(wc, 'document.body.innerText.substring(0, 300)') || '';
+  if (body.includes('登录') && body.length < 100) {
+    log('请登录抖音...');
+    for (let i = 0; i < 120; i++) {
+      await sleep(3000);
+      if (task.stopped) return;
+      const b = await execJS(wc, 'document.body.innerText.substring(0, 300)') || '';
+      if (!b.includes('登录') || b.length > 100) { log('登录成功'); return; }
+    }
   }
-  log(`  搜索框: (${Math.round(si.x)},${Math.round(si.y)}) [${si.strategy}]`);
-
-  // 步骤2：点击搜索框
-  await human.mouseClick(wc, si.x, si.y + 8);
-  await dom.sleep(400, 600);
-
-  // 步骤3：设置搜索值（JS 直接设置，比键盘更可靠）
-  const setValue = await dom.setSearchInputValue(view, keyword);
-  if (!setValue) {
-    log('❌ 搜索框值设置失败');
-    return false;
-  }
-  await dom.sleep(500, 800);
-
-  // 验证输入
-  const verified = await dom.verifySearchInput(view, keyword);
-  log(`  输入验证: ${verified ? '✓' : '✗'}`);
-  if (!verified) {
-    log('  输入未生效，重试...');
-    await dom.setSearchInputValue(view, keyword);
-    await dom.sleep(500, 800);
-  }
-
-  // 步骤4：点击搜索按钮
-  const btn = await dom.findSearchButton(view);
-  if (btn) {
-    await human.mouseClick(wc, btn.x, btn.y);
-    log(`  ✓ 已点击搜索按钮 [${btn.strategy}]`);
-  } else {
-    log('  搜索按钮未找到，按回车');
-    await human.keyPress(wc, 'Enter');
-  }
-
-  // 等待搜索结果
-  log('  等待搜索结果...');
-  await dom.sleep(3000, 5000);
-
-  // 验证是否到搜索结果页
-  const url = await execJS(wc, 'location.href') || '';
-  const title = await execJS(wc, 'document.title') || '';
-  const isSearch = url.includes('search') || title.includes('搜索');
-  log(`  验证: URL=${url.substring(0, 60)}`);
-  log(`  验证: ${isSearch ? '✓ 已到搜索页' : '✗ 未到搜索页'}`);
-
-  return isSearch;
 }
 
-// ========== 筛选 ==========
+async function checkCaptchaLoop(view, task) {
+  if (!(await dom.hasCaptcha(view))) return;
+  log('⚠ 验证码检测到，等待手动处理...');
+  notifyUser('验证码检测到，请在左侧页面手动完成');
+  for (let i = 0; i < 100; i++) {
+    await sleep(3000);
+    if (task.stopped) return;
+    if (!(await dom.hasCaptcha(view))) { log('✅ 验证码已通过'); return; }
+  }
+}
 
-async function applySortFilter(view, params) {
+async function applyFilter(view, params) {
   const wc = view.webContents;
-
-  // 找筛选按钮
-  const fp = await execJS(wc, `(function(){
-    for (const el of document.querySelectorAll('*')) {
-      const t = (el.innerText||'').trim();
-      if (t.includes('筛选') && !t.includes('筛选结果')) {
-        const r = el.getBoundingClientRect();
-        if (r.width > 20 && r.width < 120 && r.y > 30 && r.y < 250)
-          return { x: r.x+r.width/2, y: r.y+r.height/2 };
-      }
-    }
-    return null;
-  })()`);
-
+  const fp = await findTextPosition(view, '筛选');
   if (!fp) { log('  筛选按钮未找到'); return; }
 
-  // 悬停打开
+  // 悬停打开筛选面板（老版本：mouse.move 悬停，不是点击）
   await human.mouseHover(wc, fp.x, fp.y, 50, 20, 2000);
   await dom.sleep(2000, 2500);
 
-  // 选择选项
+  // 选择排序
   const sortMap = { likes: '最多点赞', newest: '最新发布' };
-  if (params.sortMode && sortMap[params.sortMode]) await clickFilterOption(wc, sortMap[params.sortMode]);
-  const timeMap = { '1': '一天内', '7': '一周内', '180': '半年内' };
-  if (params.filterTime && timeMap[params.filterTime]) await clickFilterOption(wc, timeMap[params.filterTime]);
-  const durMap = { short: '1分钟以下', mid: '1-5分钟', long: '5分钟以上' };
-  if (params.filterDuration && durMap[params.filterDuration]) await clickFilterOption(wc, durMap[params.filterDuration]);
+  if (params.sortMode && sortMap[params.sortMode]) {
+    const pos = await findTextPosition(view, sortMap[params.sortMode]);
+    if (pos) { await human.mouseClick(wc, pos.x, pos.y); log(`  排序: ${sortMap[params.sortMode]}`); await dom.sleep(1500, 2500); }
+  }
 
-  await dom.sleep(1000, 2000);
+  // 选择时间
+  const timeMap = { '1': '一天内', '7': '一周内', '180': '半年内' };
+  if (params.filterTime && timeMap[params.filterTime]) {
+    const pos = await findTextPosition(view, timeMap[params.filterTime]);
+    if (pos) { await human.mouseClick(wc, pos.x, pos.y); log(`  时间: ${timeMap[params.filterTime]}`); await dom.sleep(1500, 2500); }
+  }
+
+  // 点击筛选按钮关闭面板（老版本：click filter_loc 关闭）
   await human.mouseClick(wc, fp.x, fp.y);
   log('  筛选已应用');
   await dom.sleep(2000, 3000);
 }
 
-async function clickFilterOption(wc, text) {
-  try {
-    const pos = await execJS(wc, `(function(){
-      for (const el of document.querySelectorAll('button,span,div,label,a')) {
-        const t = (el.innerText||'').trim();
-        if (t !== '${text.replace(/'/g, "\\'")}') continue;
-        const r = el.getBoundingClientRect();
-        if (r.width>5 && r.height>5 && r.height<60 && r.width<200 && r.y>100)
-          return { x:r.x+r.width/2, y:r.y+r.height/2 };
-      }
-      return null;
-    })()`);
-    if (pos) { await human.mouseClick(wc, pos.x, pos.y); await dom.sleep(800, 1500); }
-  } catch (e) {}
-}
-
-// ========== 辅助 ==========
-
-async function simulateBrowse(view, videos) {
+/**
+ * 模拟浏览列表（老版本逻辑）
+ * 随机悬停2-4个视频卡片，模拟真人浏览
+ */
+async function simulateBrowse(view) {
   const wc = view.webContents;
-  const count = Math.min(Math.floor(Math.random() * 3) + 2, videos.length);
-  const indices = [];
-  while (indices.length < count) {
-    const idx = Math.floor(Math.random() * videos.length);
-    if (!indices.includes(idx)) indices.push(idx);
-  }
-  for (const idx of indices) {
+  const count = rand(2, 4);
+  log(`模拟浏览 ${count} 个视频...`);
+
+  for (let i = 0; i < count; i++) {
     if (!checkRunning()) break;
-    const aid = videos[idx].aid;
+    // 随机找一个视频卡片
     const pos = await execJS(wc, `(function(){
-      const links = document.querySelectorAll('a[href*="/video/${aid}"]');
-      for (const a of links) {
-        const r = a.getBoundingClientRect();
-        if (r.width > 50 && r.height > 50) return { x: r.x+r.width/2, y: r.y+r.height/2 };
+      const cards = document.querySelectorAll('[class*="card"], [class*="video-card"], a[href*="/video/"]');
+      const valid = [];
+      for (const c of cards) {
+        const r = c.getBoundingClientRect();
+        if (r.width > 80 && r.height > 80 && r.y > 50) {
+          valid.push({ x: r.x+r.width/2, y: r.y+r.height/2, w: r.width, h: r.height });
+        }
       }
-      return null;
+      if (valid.length === 0) return null;
+      return valid[Math.floor(Math.random() * valid.length)];
     })()`);
-    if (!pos) continue;
-    await human.mouseMove(wc, pos.x, pos.y);
-    await dom.sleep(1500, 3000);
+
+    if (pos) {
+      await human.mouseHover(wc, pos.x, pos.y, pos.w, pos.h, rand(1000, 3000));
+    }
+    await dom.sleep(500, 1500);
   }
+
   await dom.sleep(1000, 3000);
 }
 
-async function clickByTextSafe(view, text) {
-  return await dom.clickByText(view, text);
+async function findTextPosition(view, text) {
+  return await execJS(view.webContents, `(function(){
+    for (const el of document.querySelectorAll('*')) {
+      const t = (el.innerText||'').trim();
+      if (t === '${text.replace(/'/g, "\\'")}') {
+        const r = el.getBoundingClientRect();
+        if (r.width>10 && r.height>10 && r.height<50 && r.y<200 && r.y>30)
+          return { x:r.x+r.width/2, y:r.y+r.height/2 };
+      }
+    }
+    return null;
+  })()`);
 }
 
 async function execJS(wc, script) {
@@ -397,6 +367,7 @@ function notifyUser(msg) {
 }
 
 function log(msg) { logger.info(msg); if (logCallback) logCallback(msg); }
-function sleep(min, max) { const ms = max ? Math.floor(Math.random()*(max-min)+min) : min; return new Promise(r => setTimeout(r, ms)); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function rand(min, max) { return Math.floor(Math.random() * (max - min) + min); }
 
 module.exports = { startSearch, stopSearch, pauseSearch, isRunning };
