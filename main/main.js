@@ -5,12 +5,53 @@
 
 const { app, BrowserWindow, protocol, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { createMainWindow, getMainWindow, getDouyinView } = require('./window');
 const { setupWebRequest } = require('./webRequest');
 const { registerIpcHandlers } = require('./ipc');
 
 let mainWindow = null;
 const BLOCKED_PROTOCOLS = ['bytedance', 'sslocal', 'snssdk', 'aweme'];
+
+// ========== 环境自检 ==========
+
+function envCheck() {
+  const issues = [];
+
+  // 检查目录
+  const dirs = ['logs', 'core', 'main', 'renderer', 'preload'];
+  for (const d of dirs) {
+    const p = path.join(__dirname, '..', d);
+    if (!fs.existsSync(p)) issues.push(`目录缺失: ${d}`);
+  }
+
+  // 检查核心模块
+  const modules = ['search.js', 'monitor.js', 'pipeline.js', 'database.js', 'config.js', 'match.js', 'email.js', 'wechat.js', 'cdpInterceptor.js', 'humanBehavior.js'];
+  for (const m of modules) {
+    const p = path.join(__dirname, '..', 'core', m);
+    if (!fs.existsSync(p)) issues.push(`核心模块缺失: ${m}`);
+  }
+
+  // 检查数据库目录可写
+  const dbPath = path.join(__dirname, '..', 'monitor.db');
+  try {
+    fs.accessSync(path.dirname(dbPath), fs.constants.W_OK);
+  } catch (e) {
+    issues.push('数据库目录不可写');
+  }
+
+  // 检查配置文件
+  const cfgPath = path.join(__dirname, '..', 'config.json');
+  if (fs.existsSync(cfgPath)) {
+    try {
+      JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    } catch (e) {
+      issues.push(`配置文件损坏: ${e.message}`);
+    }
+  }
+
+  return issues;
+}
 
 // ========== 全局异常处理 ==========
 
@@ -119,6 +160,15 @@ function isBlockedUrl(url) {
 // ========== 启动 ==========
 
 app.whenReady().then(() => {
+  // 环境自检
+  const issues = envCheck();
+  if (issues.length > 0) {
+    console.error('环境自检发现问题:');
+    issues.forEach(i => console.error('  - ' + i));
+  } else {
+    console.log('环境自检通过 ✓');
+  }
+
   registerProtocolHandlers();
   initApp();
 
@@ -128,6 +178,16 @@ app.whenReady().then(() => {
       mainWindow.webContents.send('search-log', msg);
     }
   });
+
+  // 日志记录启动信息
+  try {
+    const logDir = path.join(__dirname, '..', 'logs');
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+    const date = new Date().toISOString().slice(0, 10);
+    const logFile = path.join(logDir, `${date}.log`);
+    const startMsg = `[${new Date().toLocaleString()}] [SYSTEM] 应用启动, 环境自检${issues.length > 0 ? issues.length + '个问题' : '通过'}\n`;
+    fs.appendFileSync(logFile, startMsg);
+  } catch (e) {}
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) initApp();

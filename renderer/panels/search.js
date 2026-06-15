@@ -32,7 +32,10 @@
       });
     });
 
-    window.electronAPI.onSearchLog((msg) => updateSearchStatus(msg));
+    window.electronAPI.onSearchLog((msg) => {
+      updateSearchStatus(msg);
+      appendTaskLog('search', msg);
+    });
     window.electronAPI.onSearchResult((result) => addSearchResult(result));
     restoreSchedule();
   }
@@ -210,6 +213,32 @@
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  /** 写入搜索任务独立日志 */
+  function appendTaskLog(type, msg) {
+    const logId = type === 'search' ? 'search-task-log' : 'monitor-task-log';
+    const countId = type === 'search' ? 'search-log-count' : 'monitor-log-count';
+    const el = document.getElementById(logId);
+    if (!el) return;
+    const ts = new Date().toLocaleTimeString();
+    const line = document.createElement('div');
+    line.style.cssText = 'white-space:pre-wrap;word-break:break-all;padding:1px 0;';
+    if (msg.includes('异常') || msg.includes('失败') || msg.includes('错误')) {
+      line.style.color = '#f44336';
+    } else if (msg.includes('完成') || msg.includes('成功')) {
+      line.style.color = '#4caf50';
+    } else if (msg.includes('⚠') || msg.includes('验证')) {
+      line.style.color = '#ff9800';
+    }
+    line.textContent = `[${ts}] ${msg}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+    // 更新计数
+    const countEl = document.getElementById(countId);
+    if (countEl) countEl.textContent = el.children.length + '条';
+    // 限制条数
+    while (el.children.length > 300) el.removeChild(el.firstChild);
   }
 
   if (document.readyState === 'loading') {

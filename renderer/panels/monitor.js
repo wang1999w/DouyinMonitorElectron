@@ -15,7 +15,10 @@
     document.getElementById('btn-monitor-start').addEventListener('click', startMonitor);
     document.getElementById('btn-monitor-stop').addEventListener('click', stopMonitor);
 
-    window.electronAPI.onMonitorLog((msg) => updateMonitorStatus(msg));
+    window.electronAPI.onMonitorLog((msg) => {
+      updateMonitorStatus(msg);
+      appendTaskLog('monitor', msg);
+    });
     window.electronAPI.onMonitorResult((result) => addMonitorResult(result));
 
     loadBloggerList();
@@ -235,6 +238,30 @@
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  /** 写入监控任务独立日志 */
+  function appendTaskLog(type, msg) {
+    const logId = 'monitor-task-log';
+    const countId = 'monitor-log-count';
+    const el = document.getElementById(logId);
+    if (!el) return;
+    const ts = new Date().toLocaleTimeString();
+    const line = document.createElement('div');
+    line.style.cssText = 'white-space:pre-wrap;word-break:break-all;padding:1px 0;';
+    if (msg.includes('异常') || msg.includes('失败') || msg.includes('错误')) {
+      line.style.color = '#f44336';
+    } else if (msg.includes('完成') || msg.includes('成功')) {
+      line.style.color = '#4caf50';
+    } else if (msg.includes('⚠') || msg.includes('验证')) {
+      line.style.color = '#ff9800';
+    }
+    line.textContent = `[${ts}] ${msg}`;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+    const countEl = document.getElementById(countId);
+    if (countEl) countEl.textContent = el.children.length + '条';
+    while (el.children.length > 300) el.removeChild(el.firstChild);
   }
 
   if (document.readyState === 'loading') {

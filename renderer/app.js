@@ -33,8 +33,18 @@ function initTabs() {
  * 接收主进程发来的日志消息并显示
  */
 function initLogListener() {
-  window.electronAPI.onSearchLog((msg) => appendLog(msg));
-  window.electronAPI.onMonitorLog((msg) => appendLog(msg));
+  // 系统日志：显示系统级消息（启动、错误、调度器状态）
+  window.electronAPI.onSearchLog((msg) => {
+    // 只显示系统级消息到主日志面板
+    if (msg.includes('🔔') || msg.includes('调度') || msg.includes('CDP') || msg.includes('异常') || msg.includes('错误') || msg.includes('启动') || msg.includes('停止')) {
+      appendLog(msg);
+    }
+  });
+  window.electronAPI.onMonitorLog((msg) => {
+    if (msg.includes('🔔') || msg.includes('调度') || msg.includes('CDP') || msg.includes('异常') || msg.includes('错误') || msg.includes('启动') || msg.includes('停止')) {
+      appendLog(msg);
+    }
+  });
 }
 
 /**

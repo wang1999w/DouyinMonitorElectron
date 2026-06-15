@@ -73,7 +73,7 @@
             </div>
             <div class="ctrl-row">
               <label>评论时效：</label>
-              <input type="number" id="search-ch" value="60" min="1" max="1440" style="width:50px">
+              <input type="number" id="search-ch" value="60" min="1" max="1440" style="width:70px;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
               <select id="search-ch-unit" style="padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
                 <option value="1">分钟</option>
                 <option value="60">小时</option>
@@ -210,6 +210,14 @@
 
           <div id="search-status">就绪</div>
         </div>
+        <!-- 搜索任务独立日志 -->
+        <div style="border-top:1px solid #eee;flex-shrink:0;">
+          <div style="padding:4px 10px;background:#fafafa;font-size:11px;color:#666;display:flex;justify-content:space-between;">
+            <span>搜索任务日志</span>
+            <span id="search-log-count">0条</span>
+          </div>
+          <div id="search-task-log" style="height:120px;overflow-y:auto;background:#1e1e1e;color:#d4d4d4;font-family:Consolas,monospace;font-size:11px;padding:6px 10px;"></div>
+        </div>
         <div id="search-results"></div>
       </div>
 
@@ -224,6 +232,14 @@
           </div>
           <div style="font-size:11px;color:#999;margin-bottom:6px;">每个博主独立配置意向/垃圾关键词，在"添加博主"中设置。时段节点触发时自动执行，搜索任务会自动暂停让路。</div>
           <div id="blogger-list"></div>
+        </div>
+        <!-- 监控任务独立日志 -->
+        <div style="border-top:1px solid #eee;flex-shrink:0;">
+          <div style="padding:4px 10px;background:#fafafa;font-size:11px;color:#666;display:flex;justify-content:space-between;">
+            <span>监控任务日志</span>
+            <span id="monitor-log-count">0条</span>
+          </div>
+          <div id="monitor-task-log" style="height:120px;overflow-y:auto;background:#1e1e1e;color:#d4d4d4;font-family:Consolas,monospace;font-size:11px;padding:6px 10px;"></div>
         </div>
         <div id="monitor-results"></div>
       </div>
