@@ -1,0 +1,3 @@
+{
+  "script": "(function(){ return { url: location.href, title: document.title, hasSearchInput: !!document.getElementById('search-input'), hasSearchClass: document.querySelectorAll('input.search-input').length, hasSearchIcon: !!document.querySelector('div.search-icon') }; })()"
+}

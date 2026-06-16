@@ -1,0 +1,19 @@
+{
+  "current": "idle",
+  "phase": "ready",
+  "taskId": "search_1781637457102",
+  "taskDesc": "双眼皮",
+  "context": {
+    "httpPort": 18911,
+    "currentAid": "7065610974010690853",
+    "lastAid": "7642662836653740623",
+    "lastErrorAt": 1781631258144,
+    "lastErrorExtra": {
+      "category": "unknown"
+    },
+    "category": "unknown"
+  },
+  "lastError": null,
+  "lastStable": "idle",
+  "updatedAt": 1781639577515
+}

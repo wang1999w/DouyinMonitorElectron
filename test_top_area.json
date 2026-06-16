@@ -1,0 +1,3 @@
+{
+  "script": "(function(){ var result = {}; var topArea = []; var allEls = document.querySelectorAll('div, section'); for (var i = 0; i < allEls.length; i++) { var e = allEls[i]; var r = e.getBoundingClientRect(); if (r.width > 300 && r.height > 80 && r.y >= 0 && r.y < 400) { var txt = (e.innerText||'').trim().substring(0,150).replace(/\\n/g,' '); topArea.push({ tag: e.tagName, className: (e.className||'').toString().substring(0,120), x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height), text: txt }); } } result.topAreaElements = topArea; var searchLayoutMain = document.querySelector('.search-layout__main'); if (searchLayoutMain) { result.searchLayoutMainHTML = searchLayoutMain.innerHTML.substring(0, 2000); } return result; })()"
+}

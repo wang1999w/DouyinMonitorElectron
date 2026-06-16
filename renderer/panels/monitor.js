@@ -250,11 +250,44 @@
 
   async function delBlogger() {
     if (selectedBloggerIdx < 0) { window.Toast && window.Toast.warn('请先选择一个博主'); return; }
-    if (!confirm('确定删除选中的博主吗？')) return;
     const target = currentBloggers[selectedBloggerIdx];
+    const name = target ? (target.nickname || '未命名') : '该博主';
+    const ok = await showConfirmModal(`确定删除博主「${name}」吗？此操作不可恢复。`);
+    if (!ok) return;
     await window.electronAPI.delBlogger(target ? target.sec_uid : selectedBloggerIdx);
     selectedBloggerIdx = -1;
     loadBloggerList();
+  }
+
+  /**
+   * 自定义确认对话框（避免 confirm() 阻塞 UI）
+   * @param {string} message
+   * @returns {Promise<boolean>}
+   */
+  function showConfirmModal(message) {
+    return new Promise((resolve) => {
+      const modal = document.createElement('div');
+      modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:10000;display:flex;justify-content:center;align-items:center;';
+      modal.innerHTML = `
+        <div style="background:#fff;border-radius:8px;padding:20px 24px;min-width:300px;max-width:480px;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
+          <div style="font-size:14px;color:#333;margin-bottom:16px;line-height:1.6;">${escapeHtml(message)}</div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button data-act="cancel" style="padding:6px 14px;border:1px solid #ddd;background:#fff;border-radius:4px;cursor:pointer;font-size:12px;">取消</button>
+            <button data-act="ok" style="padding:6px 14px;border:none;background:#d93025;color:#fff;border-radius:4px;cursor:pointer;font-size:12px;">确定</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      const cleanup = (val) => {
+        modal.remove();
+        resolve(val);
+      };
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) cleanup(false);
+      });
+      modal.querySelector('[data-act="cancel"]').addEventListener('click', () => cleanup(false));
+      modal.querySelector('[data-act="ok"]').addEventListener('click', () => cleanup(true));
+    });
   }
 
   async function startMonitor() {

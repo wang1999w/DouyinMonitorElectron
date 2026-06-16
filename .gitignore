@@ -7,5 +7,10 @@ config.json
 config_backups/
 .env
 *.log
+# 状态机持久化文件（必须保留，不能忽略）
+!logs/state.json
+!logs/state-history.jsonl
+!logs/.gitkeep
+!exports/.gitkeep
 .DS_Store
 Thumbs.db

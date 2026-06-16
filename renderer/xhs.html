@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CW自媒体监控系统 - 小红书</title>
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="xhs-styles.css">
+</head>
+<body>
+  <header id="app-header" class="xhs-header">
+    <h1>CW自媒体监控系统 - 小红书</h1>
+    <div id="header-stats">
+      <span id="xhs-stat-today" class="stat-badge">今日匹配: <b>0</b></span>
+      <span id="xhs-stat-total" class="stat-badge">总匹配: <b>0</b></span>
+    </div>
+  </header>
+
+  <main id="app-main">
+    <div id="left-panel">
+      <div id="xhs-placeholder">
+        <p>小红书页面加载中...</p>
+      </div>
+    </div>
+
+    <div id="right-panel">
+      <div id="panel-tabs">
+        <button class="tab-btn active" data-tab="xhs-network">Network</button>
+        <button class="tab-btn" data-tab="xhs-search">搜索</button>
+        <button class="tab-btn" data-tab="xhs-recommend">推荐</button>
+        <button class="tab-btn" data-tab="xhs-monitor">监控</button>
+        <button class="tab-btn" data-tab="xhs-settings">设置</button>
+      </div>
+
+      <!-- Network 面板 -->
+      <div id="tab-xhs-network" class="tab-content active">
+        <div id="network-toolbar">
+          <input type="text" id="xhs-network-filter" placeholder="过滤 URL...">
+          <button id="xhs-network-clear" class="btn-sm">清空</button>
+        </div>
+        <div id="xhs-network-list"></div>
+      </div>
+
+      <!-- 搜索面板 -->
+      <div id="tab-xhs-search" class="tab-content">
+        <div id="search-controls">
+          <div class="ctrl-group">
+            <label>搜索关键词（每行一个）：</label>
+            <textarea id="xhs-search-keywords" rows="3" placeholder="输入关键词..."></textarea>
+          </div>
+          <div class="ctrl-row">
+            <label>每词采集：</label>
+            <input type="number" id="xhs-search-maxn" value="10" min="1" max="100" style="width:50px">
+            <label>个笔记</label>
+            <label style="margin-left:8px;">最大评论：</label>
+            <input type="number" id="xhs-search-maxc" value="200" min="1" style="width:50px">
+          </div>
+          <div class="ctrl-row">
+            <label>评论时效：</label>
+            <input type="number" id="xhs-search-ch" value="60" min="1" max="1440" style="width:70px">
+            <select id="xhs-search-ch-unit">
+              <option value="1">分钟</option>
+              <option value="60">小时</option>
+            </select>
+          </div>
+          <div class="ctrl-row">
+            <button id="xhs-btn-search-start" class="btn-primary btn-xhs">开始搜索</button>
+            <button id="xhs-btn-search-stop" class="btn-danger" disabled>停止</button>
+          </div>
+
+          <div id="xhs-search-progress" style="display:none;background:#fff5f5;padding:8px 10px;border-radius:4px;margin-top:6px;font-size:12px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+              <span id="xhs-sp-keyword">关键词: -</span>
+              <span style="color:#e74c3c;">运行中</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;">
+              <span id="xhs-sp-note">笔记: 0/0</span>
+              <span id="xhs-sp-match">命中: 0</span>
+            </div>
+          </div>
+
+          <div id="xhs-search-status">就绪</div>
+        </div>
+        <div style="border-top:1px solid #eee;flex-shrink:0;">
+          <div style="padding:4px 10px;background:#fafafa;font-size:11px;color:#666;">搜索任务日志</div>
+          <div id="xhs-search-task-log" style="height:120px;overflow-y:auto;background:#1e1e1e;color:#d4d4d4;font-family:Consolas,monospace;font-size:11px;padding:6px 10px;"></div>
+        </div>
+        <div id="xhs-search-results"></div>
+      </div>
+
+      <!-- 推荐页面板 -->
+      <div id="tab-xhs-recommend" class="tab-content">
+        <div id="recommend-controls">
+          <div class="ctrl-group">
+            <label>笔记关键词（每行一个，匹配笔记标题）：</label>
+            <textarea id="xhs-recommend-video-kw" rows="3" placeholder="输入关键词..."></textarea>
+          </div>
+          <div class="ctrl-row">
+            <label>评论时效：</label>
+            <input type="number" id="xhs-recommend-ch" value="60" min="1" max="1440" style="width:70px">
+            <label>分钟</label>
+            <label style="margin-left:8px;">最大评论：</label>
+            <input type="number" id="xhs-recommend-maxc" value="200" min="1" style="width:50px">
+          </div>
+          <div class="ctrl-row">
+            <label>结束时间：</label>
+            <input type="datetime-local" id="xhs-recommend-end-time">
+          </div>
+          <div class="ctrl-row">
+            <button id="xhs-btn-recommend-start" class="btn-primary btn-xhs">开始浏览</button>
+            <button id="xhs-btn-recommend-pause" class="btn-secondary" disabled>暂停</button>
+            <button id="xhs-btn-recommend-stop" class="btn-danger" disabled>停止</button>
+          </div>
+
+          <div id="xhs-recommend-progress" style="display:none;background:#fff5f5;padding:8px 10px;border-radius:4px;margin-top:6px;font-size:12px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+              <span id="xhs-rp-video">笔记: 0</span>
+              <span id="xhs-rp-comment">评论: 0</span>
+              <span id="xhs-rp-match">命中: 0</span>
+              <span id="xhs-rp-status">运行中</span>
+            </div>
+            <div style="background:#eee;height:4px;border-radius:2px;overflow:hidden;">
+              <div id="xhs-rp-bar" style="background:#e74c3c;height:100%;width:0%;transition:width 0.3s;"></div>
+            </div>
+          </div>
+
+          <div id="xhs-recommend-status">就绪</div>
+        </div>
+        <div style="border-top:1px solid #eee;flex-shrink:0;">
+          <div style="padding:4px 10px;background:#fafafa;font-size:11px;color:#666;">推荐浏览日志</div>
+          <div id="xhs-recommend-task-log" style="height:120px;overflow-y:auto;background:#1e1e1e;color:#d4d4d4;font-family:Consolas,monospace;font-size:11px;padding:6px 10px;"></div>
+        </div>
+        <div id="xhs-recommend-results"></div>
+      </div>
+
+      <!-- 监控面板 -->
+      <div id="tab-xhs-monitor" class="tab-content">
+        <div id="monitor-controls">
+          <div class="ctrl-row">
+            <button id="xhs-btn-monitor-add" class="btn-primary btn-xhs">添加博主</button>
+            <button id="xhs-btn-monitor-edit" class="btn-secondary">编辑选中</button>
+            <button id="xhs-btn-monitor-del" class="btn-danger">删除选中</button>
+            <button id="xhs-btn-monitor-start" class="btn-primary btn-xhs">启动监控</button>
+            <button id="xhs-btn-monitor-stop" class="btn-danger" disabled>停止监控</button>
+          </div>
+          <div style="font-size:11px;color:#999;margin-bottom:6px;">使用 user_id（主页链接 profile/ 后的十六进制ID）添加博主</div>
+          <div id="xhs-blogger-list"></div>
+          <div id="xhs-monitor-status">就绪</div>
+        </div>
+        <div style="border-top:1px solid #eee;flex-shrink:0;">
+          <div style="padding:4px 10px;background:#fafafa;font-size:11px;color:#666;">监控任务日志</div>
+          <div id="xhs-monitor-task-log" style="height:120px;overflow-y:auto;background:#1e1e1e;color:#d4d4d4;font-family:Consolas,monospace;font-size:11px;padding:6px 10px;"></div>
+        </div>
+      </div>
+
+      <!-- 设置面板 -->
+      <div id="tab-xhs-settings" class="tab-content">
+        <div id="settings-form">
+          <fieldset>
+            <legend>小红书关键词设置</legend>
+            <div class="ctrl-row" style="align-items:flex-start">
+              <div style="flex:1">
+                <label>搜索意向关键词（每行一个）：</label>
+                <textarea id="xhs-intent-kw" rows="5"></textarea>
+              </div>
+              <div style="flex:1">
+                <label>搜索垃圾关键词（每行一个）：</label>
+                <textarea id="xhs-garbage-kw" rows="5"></textarea>
+              </div>
+            </div>
+            <div class="ctrl-row">
+              <button id="xhs-btn-save-kw" class="btn-primary btn-xhs">保存关键词</button>
+            </div>
+          </fieldset>
+          <fieldset>
+            <legend>数据导出</legend>
+            <div class="ctrl-row">
+              <button id="xhs-btn-export" class="btn-primary btn-xhs">导出意向评论 (Excel)</button>
+            </div>
+          </fieldset>
+        </div>
+      </div>
+
+      <div id="log-area">
+        <div id="log-header">运行日志</div>
+        <div id="log-content"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="panels/network-xhs.js"></script>
+  <script src="panels/search-xhs.js"></script>
+  <script src="panels/recommend-xhs.js"></script>
+  <script src="panels/monitor-xhs.js"></script>
+  <script src="panels/settings-xhs.js"></script>
+  <script src="xhs-app.js"></script>
+</body>
+</html>

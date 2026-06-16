@@ -58,7 +58,7 @@
       // 数量模式：读取所有筛选参数
       const chVal = parseInt(document.getElementById('search-ch')?.value) || 60;
       const chUnit = parseInt(document.getElementById('search-ch-unit')?.value) || 1;
-      const commentHours = chVal * chUnit; // 分钟或小时转换为分钟
+      const commentHours = chUnit === 60 ? chVal : Math.max(1, Math.floor(chVal / 60)); // 统一转为小时
       params = {
         ...params,
         days: parseInt(document.querySelector('input[name="search-time"]:checked')?.value) || 0,
@@ -84,8 +84,8 @@
         days: 7,
         filterDate: false,
         maxVideos: 9999,
-        commentHours: chUnit === 3600 ? chVal * 60 : chVal,
-        maxComments: 999,
+        commentHours: chUnit === 3600 ? chVal : Math.max(1, Math.floor(chVal / 60)),
+        maxComments: parseInt(document.getElementById('search-maxc-time')?.value) || 50,
         taskDuration: duration * durationUnit * 1000,
         sortEnabled: false,
         sortMode: 'default'

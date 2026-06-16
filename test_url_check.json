@@ -1,0 +1,3 @@
+{
+  "script": "(function(){ return { url: location.href, hasMask: !!document.querySelector('.note-detail-mask'), hasNoteDetail: !!document.querySelector('.note-detail-mask, [class*=\"note-detail\"]') }; })()"
+}

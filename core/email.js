@@ -5,7 +5,6 @@
  */
 
 const nodemailer = require('nodemailer');
-const { addNotifyLog } = require('./database');
 
 /**
  * 发送单条意向评论邮件
@@ -31,7 +30,6 @@ async function sendOne(item, emailCfg) {
     }
   }
 
-  addNotifyLog(item.comment_id || '', 'email', 2, '发送失败');
   return false;
 }
 
@@ -86,29 +84,38 @@ function createTransporter(cfg) {
 
 /**
  * 构建邮件选项
- * @param {Object} item - 评论数据
- * @param {Object} cfg - 邮件配置
- * @param {Array} receivers - 收件人列表
- * @returns {Object} nodemailer mail options
+ * 根据平台自动选择模板：抖音[DY] / 小红书[XHS]
  */
 function buildMailOptions(item, cfg, receivers) {
   const score = item.score || 0;
+  const isXHS = item.platform === 'xhs' || item.note_id;
   const prefix = score >= 10 ? '【加急】' : '【意向】';
+  const platformTag = isXHS ? '[XHS]' : '[DY]';
 
   return {
-    from: `抖音监控系统 <${cfg.sender}>`,
+    from: `CW自媒体监控系统 <${cfg.sender}>`,
     to: receivers.join(', '),
-    subject: `${prefix}${item.video_author || ''} - ${item.nickname || ''} 发表意向评论 (${score}分)`,
+    subject: `${prefix}${platformTag} ${item.video_author || item.note_author || ''} - ${item.nickname || ''} 发表意向评论 (${score}分)`,
     html: buildHtml(item)
   };
 }
 
 /**
  * 构建邮件 HTML 内容
- * @param {Object} item - 评论数据
- * @returns {string} HTML 字符串
+ * 根据平台自动选择模板：抖音[DY] / 小红书[XHS]
  */
 function buildHtml(item) {
+  const isXHS = item.platform === 'xhs' || item.note_id;
+  if (isXHS) {
+    return buildXHSHtml(item);
+  }
+  return buildDouyinHtml(item);
+}
+
+/**
+ * 抖音邮件模板 - 标识 [DY]
+ */
+function buildDouyinHtml(item) {
   const score = item.score || 0;
   const scoreColor = score >= 10 ? '#d93025' : score >= 5 ? '#f9ab00' : '#34a853';
   const scoreLabel = score >= 10 ? '时效评论' : score >= 5 ? '近期评论' : '历史评论';
@@ -118,7 +125,7 @@ function buildHtml(item) {
   return `
 <div style="max-width:680px;margin:0 auto;font-family:'Microsoft YaHei',sans-serif;">
   <div style="background:${headerBg};color:#fff;padding:20px 24px;border-radius:8px 8px 0 0;">
-    <h2 style="margin:0;font-size:18px;">${score >= 10 ? '[加急] ' : ''}抖音意向评论实时告警</h2>
+    <h2 style="margin:0;font-size:18px;">${score >= 10 ? '[加急] ' : ''}[DY] 抖音意向评论</h2>
     <p style="margin:5px 0 0;opacity:0.9;">系统自动采集 · 实时推送 · 评分 ${score}分</p>
   </div>
   <div style="border:1px solid #e5e5e5;border-top:none;border-radius:0 0 8px 8px;padding:20px 24px;background:#fafafa;">
@@ -130,15 +137,54 @@ function buildHtml(item) {
     <table width="100%" cellpadding="8" cellspacing="0">
       <tr><td width="90" style="color:#666;">用户昵称</td><td style="font-weight:bold;color:#333;">${escapeHtml(item.nickname || '未采集')}</td></tr>
       <tr><td style="color:#666;">抖音号</td><td>${escapeHtml(item.douyin_id || '未采集')}</td></tr>
-      <tr><td style="color:#666;">主页链接</td><td><a href="${escapeHtml(item.profile_url || '')}" target="_blank" style="color:#1a73e8;">${item.profile_url ? '点击访问' : '未采集'}</a></td></tr>
       <tr><td style="color:#666;">评论内容</td><td style="background:#fff;padding:10px;border-radius:4px;">${escapeHtml(item.comment_text || item.text || '未采集')}</td></tr>
       <tr><td style="color:#666;">命中关键词</td><td style="color:#d93025;font-weight:bold;">${escapeHtml(item.matched_keywords || '未匹配')}</td></tr>
       <tr><td style="color:#666;">评论时间</td><td>${formatTime(item.comment_time || item.create_time)}</td></tr>
       <tr><td style="color:#666;">IP属地</td><td>${escapeHtml(item.ip_label || '未采集')}</td></tr>
-      <tr><td style="color:#666;">所属博主</td><td>${escapeHtml(item.video_author || '未采集')}</td></tr>
-      <tr><td style="color:#666;">博主主页</td><td><a href="${escapeHtml(item.author_profile || item.profile_url || '')}" target="_blank" style="color:#1a73e8;">${(item.author_profile || item.profile_url) ? '点击访问' : '未采集'}</a></td></tr>
-      <tr><td style="color:#666;">视频标题</td><td>${escapeHtml((item.video_title || item.video_desc || '').slice(0, 50))}</td></tr>
-      <tr><td style="color:#666;">原作品</td><td><a href="${escapeHtml(videoUrl)}" target="_blank" style="color:#1a73e8;">${escapeHtml(videoUrl.slice(0, 60))}${videoUrl.length > 60 ? '...' : ''}</a></td></tr>
+      <tr><td style="color:#666;">视频文案</td><td>${escapeHtml((item.video_desc || '').slice(0, 80))}</td></tr>
+      <tr><td style="color:#666;">博主名称</td><td>${escapeHtml(item.video_author || '未采集')}</td></tr>
+      <tr><td style="color:#666;">用户主页</td><td><a href="${escapeHtml(item.profile_url || '')}" target="_blank" style="color:#1a73e8;">${item.profile_url ? '点击访问' : '未采集'}</a></td></tr>
+      <tr><td style="color:#666;">视频链接</td><td><a href="${escapeHtml(videoUrl)}" target="_blank" style="color:#1a73e8;">${escapeHtml(videoUrl.slice(0, 60))}${videoUrl.length > 60 ? '...' : ''}</a></td></tr>
+    </table>
+  </div>
+  <p style="text-align:center;color:#999;font-size:12px;margin-top:15px;">本邮件由系统自动发送，请勿直接回复</p>
+</div>`;
+}
+
+/**
+ * 小红书邮件模板 - 标识 [XHS]
+ */
+function buildXHSHtml(item) {
+  const score = item.score || 0;
+  const scoreColor = score >= 10 ? '#d93025' : score >= 5 ? '#f9ab00' : '#34a853';
+  const scoreLabel = score >= 10 ? '时效评论' : score >= 5 ? '近期评论' : '历史评论';
+  const headerBg = score >= 10 ? '#d93025' : '#ff2442';
+  const noteUrl = item.note_url || item.video_url || '';
+
+  return `
+<div style="max-width:680px;margin:0 auto;font-family:'Microsoft YaHei',sans-serif;">
+  <div style="background:${headerBg};color:#fff;padding:20px 24px;border-radius:8px 8px 0 0;">
+    <h2 style="margin:0;font-size:18px;">${score >= 10 ? '[加急] ' : ''}[XHS] 小红书意向评论</h2>
+    <p style="margin:5px 0 0;opacity:0.9;">系统自动采集 · 实时推送 · 评分 ${score}分</p>
+  </div>
+  <div style="border:1px solid #e5e5e5;border-top:none;border-radius:0 0 8px 8px;padding:20px 24px;background:#fafafa;">
+    <div style="text-align:center;margin-bottom:15px;">
+      <span style="display:inline-block;padding:6px 16px;border-radius:20px;background:${scoreColor};color:#fff;font-size:13px;font-weight:bold;">
+        ${scoreLabel} · ${score}分
+      </span>
+    </div>
+    <table width="100%" cellpadding="8" cellspacing="0">
+      <tr><td width="90" style="color:#666;">用户昵称</td><td style="font-weight:bold;color:#333;">${escapeHtml(item.nickname || '未采集')}</td></tr>
+      <tr><td style="color:#666;">用户ID</td><td>${escapeHtml(item.uid || '未采集')}</td></tr>
+      <tr><td style="color:#666;">评论内容</td><td style="background:#fff;padding:10px;border-radius:4px;">${escapeHtml(item.comment_text || item.text || '未采集')}</td></tr>
+      <tr><td style="color:#666;">命中关键词</td><td style="color:#d93025;font-weight:bold;">${escapeHtml(item.matched_keywords || '未匹配')}</td></tr>
+      <tr><td style="color:#666;">评论时间</td><td>${formatTime(item.comment_time || item.create_time)}</td></tr>
+      <tr><td style="color:#666;">IP属地</td><td>${escapeHtml(item.ip_label || '未采集')}</td></tr>
+      <tr><td style="color:#666;">点赞数</td><td>${item.like_count || 0}</td></tr>
+      <tr><td style="color:#666;">笔记标题</td><td>${escapeHtml((item.note_title || item.video_desc || '').slice(0, 80))}</td></tr>
+      <tr><td style="color:#666;">笔记作者</td><td>${escapeHtml(item.note_author || item.video_author || '未采集')}</td></tr>
+      <tr><td style="color:#666;">用户主页</td><td><a href="${escapeHtml(item.profile_url || '')}" target="_blank" style="color:#ff2442;">${item.profile_url ? '点击访问' : '未采集'}</a></td></tr>
+      <tr><td style="color:#666;">笔记链接</td><td><a href="${escapeHtml(noteUrl)}" target="_blank" style="color:#ff2442;">${escapeHtml(noteUrl.slice(0, 60))}${noteUrl.length > 60 ? '...' : ''}</a></td></tr>
     </table>
   </div>
   <p style="text-align:center;color:#999;font-size:12px;margin-top:15px;">本邮件由系统自动发送，请勿直接回复</p>

@@ -192,8 +192,8 @@ body {
   font-size: 10px;
 }
 
-/* ========== 搜索/监控面板 ========== */
-#search-controls, #monitor-controls {
+/* ========== 搜索/监控/推荐面板 ========== */
+#search-controls, #monitor-controls, #recommend-controls {
   flex-shrink: 0;
   padding-bottom: 10px;
   border-bottom: 1px solid #eee;
@@ -245,13 +245,13 @@ input[type="checkbox"], input[type="radio"] {
   margin-right: 4px;
 }
 
-#search-status, #monitor-status {
+#search-status, #monitor-status, #recommend-status {
   font-size: 12px;
   color: #666;
   padding: 4px 0;
 }
 
-#search-results, #monitor-results {
+#search-results, #monitor-results, #recommend-results {
   flex: 1;
   overflow-y: auto;
 }

@@ -21,6 +21,24 @@ document.addEventListener('DOMContentLoaded', () => {
   loadConfig();
 });
 
+// ========== 平台切换 ==========
+
+window.switchPlatform = function(platform) {
+  const douyinBtn = document.getElementById('btn-platform-douyin');
+  const xhsBtn = document.getElementById('btn-platform-xhs');
+
+  if (platform === 'xhs') {
+    douyinBtn.classList.remove('active');
+    xhsBtn.classList.add('active', 'active-xhs');
+    // 通知主进程打开小红书窗口
+    window.electronAPI.switchPlatform && window.electronAPI.switchPlatform('xhs');
+  } else {
+    xhsBtn.classList.remove('active', 'active-xhs');
+    douyinBtn.classList.add('active');
+    window.electronAPI.switchPlatform && window.electronAPI.switchPlatform('douyin');
+  }
+};
+
 // ========== 通知组件（内嵌） ==========
 
 const Toast = (() => {
@@ -95,6 +113,12 @@ function initLogListener() {
   });
   // 监控任务的系统级消息 → 运行日志
   window.electronAPI.onMonitorLog((msg) => {
+    if (msg.includes('🔔') || msg.includes('✅') || msg.includes('🛑') || msg.includes('⚠️') || msg.includes('启动') || msg.includes('完成') || msg.includes('停止') || msg.includes('异常')) {
+      appendLog(msg, 'system');
+    }
+  });
+  // 推荐浏览的系统级消息 → 运行日志
+  window.electronAPI.onRecommendLog && window.electronAPI.onRecommendLog((msg) => {
     if (msg.includes('🔔') || msg.includes('✅') || msg.includes('🛑') || msg.includes('⚠️') || msg.includes('启动') || msg.includes('完成') || msg.includes('停止') || msg.includes('异常')) {
       appendLog(msg, 'system');
     }

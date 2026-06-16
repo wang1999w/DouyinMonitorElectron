@@ -17,6 +17,9 @@ const videoProcessor = require('./videoProcessor');
 const pipeline = require('./pipeline');
 const scheduler = require('./scheduler');
 const { getLogger } = require('./logger');
+const { getStateMachine, STATES } = require('./stateMachine');
+const { getErrorAnalyzer, CATEGORIES, SEVERITY } = require('./errorAnalyzer');
+const { getRecoveryManager } = require('./recovery');
 
 const logger = getLogger('MonitorEngine');
 
@@ -36,15 +39,27 @@ function startMonitor(onLog, onProgress) {
   logCallback = onLog;
   progressCallback = onProgress || null;
   log('监控已启动（手动模式）');
+  getStateMachine().transition(STATES.MONITORING, { phase: 'starting', taskDesc: '博主监控' });
 
   // 立即执行所有启用的博主
-  executeAllBloggers().catch(e => log(`监控异常: ${e.message}`));
+  executeAllBloggers().catch(e => {
+    const analyzed = getErrorAnalyzer().analyze(e, { phase: 'monitor_loop' });
+    log(`监控异常: ${analyzed.message}`);
+    getStateMachine().setError(analyzed.message, { category: analyzed.category });
+    if (analyzed.severity === SEVERITY.FATAL) {
+      getRecoveryManager().autoRecover(analyzed, { phase: 'monitor' }).catch(() => {});
+    }
+  });
   return true;
 }
 
 function stopMonitor() {
   if (currentTask) currentTask.stopped = true;
   monitorRunning = false;
+  const state = getStateMachine();
+  if (state.current === STATES.MONITORING) {
+    state.transition(STATES.IDLE, { phase: 'stopped', taskDesc: null });
+  }
   log('监控已停止');
 }
 
@@ -58,18 +73,26 @@ async function executeAllBloggers() {
     if (bloggers.length === 0) {
       log('无启用的监控博主');
       monitorRunning = false;
+      getStateMachine().transition(STATES.IDLE, { phase: 'idle' });
       return;
     }
     log(`开始监控 ${bloggers.length} 个博主`);
     for (const blogger of bloggers) {
       if (!monitorRunning) break;
+      getStateMachine().setPhase('monitoring_blogger', { currentBlogger: blogger.nickname });
       await executeSingleBlogger(blogger, cfg, logCallback, progressCallback);
     }
     log('所有博主监控完成');
   } catch (e) {
-    log(`监控异常: ${e.message}`);
+    const analyzed = getErrorAnalyzer().analyze(e, { phase: 'monitor_all' });
+    log(`监控异常: ${analyzed.message} (${analyzed.category})`);
+    getStateMachine().setError(analyzed.message, { category: analyzed.category });
   } finally {
     monitorRunning = false;
+    const state = getStateMachine();
+    if (state.current === STATES.MONITORING) {
+      state.transition(STATES.IDLE, { phase: 'idle' });
+    }
   }
 }
 
@@ -115,8 +138,8 @@ async function executeSingleBlogger(blogger, cfg, onLog, onProgress) {
   const intentKw = blogger.intent_keywords || [];
   const garbageKw = blogger.garbage_keywords || [];
   const commentHours = blogger.comment_hours || 60;
-  const cutoffTs = Math.floor(Date.now() / 1000) - commentHours * 60;
-  log(`  评论时效: ${commentHours}分钟内`);
+  const cutoffTs = Math.floor(Date.now() / 1000) - commentHours * 3600;
+  log(`  评论时效: ${commentHours}小时内`);
 
   try {
     // 1. 跳转到博主主页

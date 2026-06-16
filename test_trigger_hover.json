@@ -1,0 +1,3 @@
+{
+  "script": "(function(){ var filterBtn = document.querySelector('div.filter'); if (!filterBtn) return { error: 'no filter btn' }; filterBtn.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true, view: window })); filterBtn.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window })); return { triggered: true, btnRect: (function(){ var r = filterBtn.getBoundingClientRect(); return {x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}; })() }; })()"
+}

@@ -5,7 +5,6 @@
  */
 
 const axios = require('axios');
-const { addNotifyLog } = require('./database');
 
 /**
  * 发送单条意向评论到企业微信
@@ -32,7 +31,6 @@ async function sendOne(item, wechatCfg) {
     }
   }
 
-  addNotifyLog(item.comment_id || '', 'wechat', 2, '推送失败');
   return false;
 }
 
@@ -59,16 +57,29 @@ async function sendTest(wechatCfg) {
 /**
  * 构建 markdown 格式消息内容
  * 企业微信 markdown 支持有限（不支持表格、图片等）
+ * 根据平台自动选择模板：抖音[DY] / 小红书[XHS]
  * @param {Object} item - 评论数据
  * @returns {string} markdown 字符串
  */
 function buildMarkdown(item) {
   const score = item.score || 0;
+  const isXHS = item.platform === 'xhs' || item.note_id;
+
+  if (isXHS) {
+    return buildXHSMarkdown(item, score);
+  }
+  return buildDouyinMarkdown(item, score);
+}
+
+/**
+ * 抖音推送模板 - 标识 [DY]
+ */
+function buildDouyinMarkdown(item, score) {
   const scoreLabel = score >= 10 ? '🔴时效评论' : score >= 5 ? '🟡近期评论' : '🟢历史评论';
   const prefix = score >= 10 ? '⚠️【加急】' : '📌【意向】';
 
   let lines = [
-    `${prefix}<font color="info">抖音意向评论实时告警</font>`,
+    `${prefix}<font color="info">[DY] 抖音意向评论</font>`,
     `> 评分: <font color="warning">${score}分</font> | ${scoreLabel}`,
     `---`,
     `**用户昵称**: ${item.nickname || '未采集'}`,
@@ -77,9 +88,39 @@ function buildMarkdown(item) {
     `**命中关键词**: <font color="warning">${item.matched_keywords || '未匹配'}</font>`,
     `**评论时间**: ${formatTime(item.comment_time || item.create_time)}`,
     `**IP属地**: ${item.ip_label || '未采集'}`,
-    `**所属博主**: ${item.video_author || '未采集'}`,
-    `**原作品**: [点击查看](${item.video_url || '未采集'})`,
-    `**博主主页**: ${item.author_profile || item.profile_url || '未采集'}`,
+    `**视频文案**: ${(item.video_desc || '').slice(0, 80) || '未采集'}`,
+    `**用户主页**: ${item.profile_url ? `[点击访问](${item.profile_url})` : '未采集'}`,
+    `**原作品**: ${item.video_url ? `[点击查看](${item.video_url})` : '未采集'}`,
+  ];
+
+  lines.push(`---`);
+  lines.push(`> 系统自动采集 · 实时推送`);
+
+  return lines.join('\n');
+}
+
+/**
+ * 小红书推送模板 - 标识 [XHS]
+ */
+function buildXHSMarkdown(item, score) {
+  const scoreLabel = score >= 10 ? '🔴时效评论' : score >= 5 ? '🟡近期评论' : '🟢历史评论';
+  const prefix = score >= 10 ? '⚠️【加急】' : '📌【意向】';
+
+  let lines = [
+    `${prefix}<font color="info">[XHS] 小红书意向评论</font>`,
+    `> 评分: <font color="warning">${score}分</font> | ${scoreLabel}`,
+    `---`,
+    `**用户昵称**: ${item.nickname || '未采集'}`,
+    `**用户ID**: ${item.uid || '未采集'}`,
+    `**评论内容**: ${item.comment_text || item.text || '未采集'}`,
+    `**命中关键词**: <font color="warning">${item.matched_keywords || '未匹配'}</font>`,
+    `**评论时间**: ${formatTime(item.comment_time || item.create_time)}`,
+    `**IP属地**: ${item.ip_label || '未采集'}`,
+    `**点赞数**: ${item.like_count || 0}`,
+    `**笔记标题**: ${(item.note_title || item.video_desc || '').slice(0, 80) || '未采集'}`,
+    `**笔记作者**: ${item.note_author || item.video_author || '未采集'}`,
+    `**用户主页**: ${item.profile_url ? `[点击访问](${item.profile_url})` : '未采集'}`,
+    `**笔记链接**: ${item.note_url || item.video_url ? `[点击查看](${item.note_url || item.video_url})` : '未采集'}`,
   ];
 
   lines.push(`---`);

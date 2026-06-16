@@ -30,7 +30,7 @@ let dirty = false;
 let pendingWrites = 0;
 
 // 当前 schema 版本号（每次新增迁移 +1）
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 5;
 
 async function initDatabase() {
   if (db) return;
@@ -137,7 +137,8 @@ function initTables() {
       score INTEGER DEFAULT 0,
       capture_time INTEGER,
       email_sent INTEGER DEFAULT 0,
-      capture_date TEXT
+      capture_date TEXT,
+      source TEXT DEFAULT 'api'
     );
 
     CREATE TABLE IF NOT EXISTS run_logs (
@@ -155,6 +156,44 @@ function initTables() {
       error_msg TEXT,
       create_time INTEGER
     );
+
+    CREATE TABLE IF NOT EXISTS xhs_intent_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      note_id TEXT,
+      comment_id TEXT UNIQUE,
+      nickname TEXT,
+      user_id TEXT,
+      profile_url TEXT,
+      comment_text TEXT,
+      matched_keywords TEXT,
+      comment_time INTEGER,
+      ip_label TEXT,
+      note_author TEXT,
+      note_title TEXT,
+      note_url TEXT,
+      score INTEGER DEFAULT 0,
+      capture_time INTEGER,
+      email_sent INTEGER DEFAULT 0,
+      capture_date TEXT,
+      source TEXT DEFAULT 'api',
+      platform TEXT DEFAULT 'xhs'
+    );
+
+    CREATE TABLE IF NOT EXISTS xhs_notes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      note_id TEXT UNIQUE NOT NULL,
+      blogger_user_id TEXT,
+      title TEXT,
+      publish_time INTEGER,
+      last_comment_time INTEGER DEFAULT 0,
+      total_intent INTEGER DEFAULT 0,
+      status INTEGER DEFAULT 1
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_xhs_intent_capture_date ON xhs_intent_comments(capture_date);
+    CREATE INDEX IF NOT EXISTS idx_xhs_intent_email_sent ON xhs_intent_comments(email_sent);
+    CREATE INDEX IF NOT EXISTS idx_xhs_intent_note_id ON xhs_intent_comments(note_id);
+    CREATE INDEX IF NOT EXISTS idx_xhs_intent_capture_time ON xhs_intent_comments(capture_time);
 
     CREATE INDEX IF NOT EXISTS idx_intent_capture_date ON intent_comments(capture_date);
     CREATE INDEX IF NOT EXISTS idx_intent_email_sent ON intent_comments(email_sent);
@@ -185,6 +224,53 @@ function applyMigrations() {
       `CREATE INDEX IF NOT EXISTS idx_intent_email_sent ON intent_comments(email_sent)`,
       `CREATE INDEX IF NOT EXISTS idx_intent_aweme_id ON intent_comments(aweme_id)`,
       `CREATE INDEX IF NOT EXISTS idx_intent_capture_time ON intent_comments(capture_time)`
+    ],
+    3: [
+      // v2 -> v3: 添加 source 列（区分 api/dom 来源）
+      `ALTER TABLE intent_comments ADD COLUMN source TEXT DEFAULT 'api'`
+    ],
+    4: [
+      // v3 -> v4: 修复 profile_url 重复拼接（https://www.douyin.com//www.douyin.com/user/... -> https://www.douyin.com/user/...）
+      `UPDATE intent_comments SET profile_url = REPLACE(profile_url, 'https://www.douyin.com//www.douyin.com/', 'https://www.douyin.com/') WHERE profile_url LIKE 'https://www.douyin.com//www.douyin.com/%'`,
+      `UPDATE intent_comments SET profile_url = REPLACE(profile_url, 'https://www.douyin.com/www.douyin.com/', 'https://www.douyin.com/') WHERE profile_url LIKE 'https://www.douyin.com/www.douyin.com/%'`
+    ],
+    5: [
+      // v4 -> v5: 新增小红书表
+      `CREATE TABLE IF NOT EXISTS xhs_intent_comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        note_id TEXT,
+        comment_id TEXT UNIQUE,
+        nickname TEXT,
+        user_id TEXT,
+        profile_url TEXT,
+        comment_text TEXT,
+        matched_keywords TEXT,
+        comment_time INTEGER,
+        ip_label TEXT,
+        note_author TEXT,
+        note_title TEXT,
+        note_url TEXT,
+        score INTEGER DEFAULT 0,
+        capture_time INTEGER,
+        email_sent INTEGER DEFAULT 0,
+        capture_date TEXT,
+        source TEXT DEFAULT 'api',
+        platform TEXT DEFAULT 'xhs'
+      )`,
+      `CREATE TABLE IF NOT EXISTS xhs_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        note_id TEXT UNIQUE NOT NULL,
+        blogger_user_id TEXT,
+        title TEXT,
+        publish_time INTEGER,
+        last_comment_time INTEGER DEFAULT 0,
+        total_intent INTEGER DEFAULT 0,
+        status INTEGER DEFAULT 1
+      )`,
+      `CREATE INDEX IF NOT EXISTS idx_xhs_intent_capture_date ON xhs_intent_comments(capture_date)`,
+      `CREATE INDEX IF NOT EXISTS idx_xhs_intent_email_sent ON xhs_intent_comments(email_sent)`,
+      `CREATE INDEX IF NOT EXISTS idx_xhs_intent_note_id ON xhs_intent_comments(note_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_xhs_intent_capture_time ON xhs_intent_comments(capture_time)`
     ]
   };
 
@@ -256,6 +342,10 @@ function updateVideoCursor(awemeId, lastTime) {
 
 function addIntentComment(commentInfo) {
   try {
+    if (!db) {
+      logger.warn('addIntentComment: 数据库未初始化，跳过');
+      return false;
+    }
     const now = Math.floor(Date.now() / 1000);
     const today = new Date().toISOString().slice(0, 10);
 
@@ -282,8 +372,8 @@ function addIntentComment(commentInfo) {
       `INSERT OR IGNORE INTO intent_comments
        (aweme_id, comment_id, nickname, douyin_id, sec_uid, profile_url,
         comment_text, matched_keywords, comment_time, ip_label,
-        video_author, video_title, video_url, score, capture_time, email_sent, capture_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+        video_author, video_title, video_url, score, capture_time, email_sent, capture_date, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       [
         commentInfo.aweme_id || '',
         commentInfo.comment_id || '',
@@ -294,10 +384,11 @@ function addIntentComment(commentInfo) {
         commentInfo.create_time || commentInfo.comment_time || now,
         commentInfo.ip || commentInfo.ip_label || '',
         commentInfo.video_author || '',
-        commentInfo.video_info || commentInfo.video_title || '',
+        commentInfo.video_desc || commentInfo.video_info || commentInfo.video_title || '',
         commentInfo.video_url || '',
         commentInfo.score || 0,
-        now, today
+        now, today,
+        commentInfo.source || 'api'
       ]
     );
     return true;
@@ -436,6 +527,120 @@ function clearIntentComments() {
   run('DELETE FROM intent_comments');
 }
 
+/**
+ * 简化别名：getLeads = 分页查询意向评论
+ * @param {number} limit
+ * @param {number} offset
+ * @returns {Array}
+ */
+function getLeads(limit = 100, offset = 0) {
+  return getRecentMatchesPage(offset, limit, {});
+}
+
+// ========== 小红书意向评论操作 ==========
+
+function addXHSIntentComment(commentInfo) {
+  try {
+    if (!db) {
+      logger.warn('addXHSIntentComment: 数据库未初始化，跳过');
+      return false;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const today = new Date().toISOString().slice(0, 10);
+    const nickname = commentInfo.nickname || '';
+    const commentText = commentInfo.text || commentInfo.comment_text || '';
+    const userId = commentInfo.uid || commentInfo.user_id || '';
+
+    if (commentInfo.comment_id) {
+      const exists = queryOne('SELECT id FROM xhs_intent_comments WHERE comment_id=?', [commentInfo.comment_id]);
+      if (exists) return false;
+    }
+    const dup = queryOne(
+      'SELECT id FROM xhs_intent_comments WHERE user_id=? AND nickname=? AND comment_text=? AND capture_date=?',
+      [userId, nickname, commentText, today]
+    );
+    if (dup) return false;
+
+    const keywords = Array.isArray(commentInfo.matched_keywords)
+      ? commentInfo.matched_keywords.join(',')
+      : (commentInfo.matched_keywords || '');
+
+    run(
+      `INSERT OR IGNORE INTO xhs_intent_comments
+       (note_id, comment_id, nickname, user_id, profile_url,
+        comment_text, matched_keywords, comment_time, ip_label,
+        note_author, note_title, note_url, score, capture_time, email_sent, capture_date, source, platform)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
+      [
+        commentInfo.note_id || commentInfo.aweme_id || '',
+        commentInfo.comment_id || '',
+        nickname, userId,
+        commentInfo.profile_url || '',
+        commentText, keywords,
+        commentInfo.create_time || commentInfo.comment_time || now,
+        commentInfo.ip_label || '',
+        commentInfo.note_author || commentInfo.video_author || '',
+        commentInfo.note_title || commentInfo.video_title || commentInfo.video_desc || '',
+        commentInfo.note_url || commentInfo.video_url || '',
+        commentInfo.score || 0,
+        now, today,
+        commentInfo.source || 'api',
+        'xhs'
+      ]
+    );
+    return true;
+  } catch (e) {
+    logger.error(`addXHSIntentComment 失败: ${e.message}`);
+    return false;
+  }
+}
+
+function getXHSStats() {
+  const today = new Date().toISOString().slice(0, 10);
+  const row = queryOne(`
+    SELECT
+      COUNT(*) AS total_comments,
+      SUM(CASE WHEN capture_date = ? THEN 1 ELSE 0 END) AS today_matches,
+      SUM(CASE WHEN capture_date = ? AND email_sent = 1 THEN 1 ELSE 0 END) AS today_emails
+    FROM xhs_intent_comments
+  `, [today, today]) || {};
+  return {
+    total_comments: row.total_comments || 0,
+    today_matches: row.today_matches || 0,
+    today_emails: row.today_emails || 0
+  };
+}
+
+function getXHSRecentMatchesPage(offset = 0, limit = 50, filter = {}) {
+  const where = [];
+  const params = [];
+  if (filter.date) { where.push('capture_date = ?'); params.push(filter.date); }
+  if (filter.keyword) {
+    where.push('(nickname LIKE ? OR comment_text LIKE ? OR note_title LIKE ?)');
+    const k = `%${filter.keyword}%`;
+    params.push(k, k, k);
+  }
+  const sql = `SELECT * FROM xhs_intent_comments ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY id DESC LIMIT ? OFFSET ?`;
+  return queryAll(sql, [...params, limit, offset]);
+}
+
+function getXHSMatchesCount(filter = {}) {
+  const where = [];
+  const params = [];
+  if (filter.date) { where.push('capture_date = ?'); params.push(filter.date); }
+  if (filter.keyword) {
+    where.push('(nickname LIKE ? OR comment_text LIKE ? OR note_title LIKE ?)');
+    const k = `%${filter.keyword}%`;
+    params.push(k, k, k);
+  }
+  const row = queryOne(`SELECT COUNT(*) AS c FROM xhs_intent_comments ${where.length ? 'WHERE ' + where.join(' AND ') : ''}`, params);
+  return row?.c || 0;
+}
+
+function clearXHSIntentComments() {
+  run('DELETE FROM xhs_intent_comments');
+}
+
 module.exports = {
   getDb,
   initDatabase,
@@ -454,5 +659,11 @@ module.exports = {
   getRecentMatchesPage,
   getMatchesCount,
   clearIntentComments,
-  saveToDisk
+  getLeads,
+  saveToDisk,
+  addXHSIntentComment,
+  getXHSStats,
+  getXHSRecentMatchesPage,
+  getXHSMatchesCount,
+  clearXHSIntentComments
 };

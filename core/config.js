@@ -21,7 +21,22 @@ const DEFAULT_CONFIG = {
   // 搜索定时任务（scheduler 使用 enabled/startHour/endHour/intervalMinutes）
   search_schedule: { enabled: false, startHour: 8, endHour: 22, intervalMinutes: 30, interval: 30, unit: 60, hours: '08:00-22:00' },
   email: { enable: false, smtp_server: 'smtp.qq.com', smtp_port: 465, sender: '', auth_code: '', receivers: '' },
-  wechat: { enable: false, webhook_url: '' }
+  wechat: { enable: false, webhook_url: '' },
+  // 小红书配置
+  xhs_search_intent_keywords: ['咨询', '多少钱', '价格', '了解', '想了解', '推荐'],
+  xhs_search_garbage_keywords: ['666', '关注', '互粉', '点赞', '收藏'],
+  // 小红书筛选配置
+  // sortMode: default(综合) / newest(最新) / likes(最多点赞) / comments(最多评论) / collects(最多收藏)
+  xhs_search_sort_mode: 'default',
+  // noteType: 不限 / 视频 / 图文
+  xhs_search_note_type: '不限',
+  // filterTime: 0(不限) / 1(一天内) / 7(一周内) / 180(半年内)
+  xhs_search_filter_time: '0',
+  // searchScope: 不限 / 已看过 / 未看过 / 已关注
+  xhs_search_scope: '不限',
+  // location: 不限 / 同城 / 附近
+  xhs_search_location: '不限',
+  xhs_monitor_bloggers: []
 };
 
 /**

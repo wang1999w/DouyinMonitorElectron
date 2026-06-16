@@ -49,7 +49,9 @@ const SEARCH_API_PATTERNS = [
 const MAX_CACHED_VIDEOS = 200;
 
 class CDPInterceptor {
-  constructor() {
+  constructor(options = {}) {
+    // 实例ID（用于诊断多实例问题）
+    this._instanceId = Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
     /** @type {Object<string, Array>} aweme_id -> 评论列表 */
     this.comments = {};
     /** 评论访问顺序（用于 LRU 淘汰） */
@@ -73,6 +75,19 @@ class CDPInterceptor {
     this._webContents = null;
     this._messageHandler = null;
     this._detachHandler = null;
+    // ===== 新增：全量网络抓包 =====
+    /** 全量网络请求日志（按时间顺序） */
+    this.allRequests = [];
+    /** 请求 ID -> 请求对象映射（用于补全响应） */
+    this._requestMap = new Map();
+    /** 累计统计 */
+    this._stats = { total: 0, byDomain: {}, byMethod: {}, byStatus: {} };
+    /** 抓包是否启用（默认 true；可通过 setCaptureEnabled 切换） */
+    this._captureEnabled = options.captureEnabled !== false;
+    /** 抓包 body 大小限制（默认 1MB） */
+    this._maxBodySize = options.maxBodySize || 1024 * 1024;
+    /** 抓包最大保留条数（默认 5000，超出 LRU 淘汰） */
+    this._maxRequests = options.maxRequests || 5000;
   }
 
   /**
@@ -98,8 +113,23 @@ class CDPInterceptor {
 
     this._webContents = webContents;
     this._messageHandler = (event, method, params) => {
-      if (method === 'Network.responseReceived') {
-        this._handleResponseReceived(webContents, params);
+      // 全量抓包：监听所有网络事件
+      if (this._captureEnabled) {
+        if (method === 'Network.requestWillBeSent') {
+          this._onRequestWillBeSent(params);
+        } else if (method === 'Network.responseReceived') {
+          this._onResponseReceived(params);
+        } else if (method === 'Network.loadingFinished') {
+          this._onLoadingFinished(params);
+        } else if (method === 'Network.loadingFailed') {
+          this._onLoadingFailed(params);
+        } else if (method === 'Network.dataReceived') {
+          this._onDataReceived(params);
+        }
+      }
+      // 业务逻辑：评论/视频/搜索 - 在 loadingFinished 后处理（body 才可用）
+      if (method === 'Network.loadingFinished') {
+        this._handleLoadingFinished(webContents, params);
       }
     };
     this._detachHandler = (event, reason) => {
@@ -110,8 +140,232 @@ class CDPInterceptor {
     webContents.debugger.on('message', this._messageHandler);
     webContents.debugger.on('detach', this._detachHandler);
 
-    webContents.debugger.sendCommand('Network.enable', {});
-    logger.info('CDP 拦截器已启动');
+    webContents.debugger.sendCommand('Network.enable', {
+      maxTotalBufferSize: 10 * 1024 * 1024,
+      maxResourceBufferSize: 5 * 1024 * 1024
+    });
+    logger.info('CDP 拦截器已启动（含全量网络抓包）');
+  }
+
+  // ===== 新增：全量网络抓包方法 =====
+
+  /**
+   * 启用 / 禁用全量抓包
+   */
+  setCaptureEnabled(enabled) {
+    this._captureEnabled = !!enabled;
+    logger.info(`全量抓包已${this._captureEnabled ? '启用' : '禁用'}`);
+  }
+
+  /**
+   * 请求发出 - 记录请求基础信息
+   */
+  _onRequestWillBeSent(params) {
+    const { requestId, request, timestamp, type, frameId, initiator } = params;
+    const url = request.url;
+
+    // 跳过一些干扰（CSS/字体/图片等可按需关闭）
+    if (type === 'Image' || type === 'Font' || type === 'Stylesheet') return;
+
+    const req = {
+      requestId,
+      method: request.method,
+      url,
+      type,
+      ts: Date.now(),
+      cdpTs: timestamp,
+      hasPostData: !!request.postData,
+      postData: request.postData ? request.postData.substring(0, this._maxBodySize) : null,
+      initiator: initiator ? initiator.type : null,
+      response: null,
+      parsed: null,
+      failed: false
+    };
+
+    this._requestMap.set(requestId, req);
+    this._addToLog(req);
+  }
+
+  /**
+   * 响应到达 - 仅记录元数据，不获取 body
+   * body 在 loadingFinished 后才可用
+   */
+  _onResponseReceived(params) {
+    if (!this._webContents) return;
+    const { requestId, response } = params;
+    const req = this._requestMap.get(requestId);
+    if (!req) return;
+
+    req.response = {
+      status: response.status,
+      statusText: response.statusText,
+      type: response.type,
+      url: response.url,
+      headers: response.headers,
+      remoteIP: response.remoteIPAddress,
+      remotePort: response.remotePort,
+      fromDiskCache: response.fromDiskCache,
+      fromServiceWorker: response.fromServiceWorker,
+      body: null,
+      bodyTruncated: false,
+      bodyType: null,
+      bodySize: 0
+    };
+
+    // 统计
+    this._stats.total++;
+    const statusClass = `${Math.floor(response.status / 100)}xx`;
+    this._stats.byStatus[statusClass] = (this._stats.byStatus[statusClass] || 0) + 1;
+    try {
+      const host = new URL(response.url).host;
+      this._stats.byDomain[host] = (this._stats.byDomain[host] || 0) + 1;
+    } catch (_) {}
+    this._stats.byMethod[req.method] = (this._stats.byMethod[req.method] || 0) + 1;
+  }
+
+  /**
+   * 加载完成 - 此时 body 可用，异步获取
+   */
+  _onLoadingFinished(params) {
+    if (!this._webContents) return;
+    const { requestId } = params;
+    const req = this._requestMap.get(requestId);
+    if (!req || !req.response) return;
+
+    // 跳过非文本类型
+    if (req.type === 'Image' || req.type === 'Font' || req.type === 'Stylesheet' || req.type === 'Media') return;
+
+    // 异步获取 body
+    this._webContents.debugger.sendCommand('Network.getResponseBody', { requestId })
+      .then(({ body, base64Encoded }) => {
+        if (!body) return;
+        if (body.length > this._maxBodySize) {
+          req.response.bodyTruncated = true;
+          req.response.body = body.substring(0, this._maxBodySize);
+        } else {
+          req.response.body = body;
+        }
+        req.response.bodySize = body.length;
+        if (base64Encoded) {
+          req.response.bodyType = 'base64';
+        } else {
+          req.response.bodyType = 'text';
+          try {
+            req.parsed = JSON.parse(body);
+            if (req.parsed && req.parsed.comments) {
+              req.parsed.commentCount = req.parsed.comments.length;
+            } else if (req.parsed && req.parsed.data && Array.isArray(req.parsed.data)) {
+              req.parsed.dataCount = req.parsed.data.length;
+            }
+          } catch (_) {}
+        }
+      })
+      .catch(() => {});
+  }
+
+  /**
+   * 数据接收（仅记录大请求）
+   */
+  _onDataReceived(params) {
+    // 占位 - 暂不处理分片 body
+  }
+
+  /**
+   * 加载失败
+   */
+  _onLoadingFailed(params) {
+    const req = this._requestMap.get(params.requestId);
+    if (!req) return;
+    req.failed = true;
+    req.failure = {
+      errorText: params.errorText,
+      canceled: params.canceled,
+      blockedReason: params.blockedReason,
+      ts: Date.now()
+    };
+  }
+
+  /**
+   * 添加到日志（含 LRU 淘汰）
+   */
+  _addToLog(req) {
+    this.allRequests.push(req);
+    while (this.allRequests.length > this._maxRequests) {
+      this.allRequests.shift();
+    }
+  }
+
+  /**
+   * 获取全部请求（返回副本）
+   */
+  getAllRequests() {
+    return this.allRequests.slice();
+  }
+
+  /**
+   * 获取最近 N 条请求
+   */
+  getRecentRequests(n) {
+    n = n || 50;
+    return this.allRequests.slice(-n);
+  }
+
+  /**
+   * 获取最后一次的请求摘要（用于快速查看最近发生了什么）
+   */
+  getLastSummary() {
+    if (this.allRequests.length === 0) return { count: 0 };
+    const recent = this.allRequests.slice(-10);
+    return {
+      count: this.allRequests.length,
+      stats: this._stats,
+      recent: recent.map(r => ({
+        ts: r.ts,
+        method: r.method,
+        url: r.url,
+        status: r.response ? r.response.status : null,
+        type: r.type,
+        failed: r.failed,
+        bodySize: r.response ? r.response.bodySize : 0,
+        commentCount: r.parsed ? r.parsed.commentCount : null
+      }))
+    };
+  }
+
+  /**
+   * 清空请求日志
+   */
+  clearRequests() {
+    const count = this.allRequests.length;
+    this.allRequests = [];
+    this._requestMap.clear();
+    this._stats = { total: 0, byDomain: {}, byMethod: {}, byStatus: {} };
+    return count;
+  }
+
+  /**
+   * 导出所有请求到 NDJSON 文件
+   */
+  exportToFile(filePath) {
+    const fs = require('fs');
+    const path = require('path');
+    try {
+      // 简化版（不含 body，避免内存爆）
+      const lines = this.allRequests.map(r => JSON.stringify({
+        ts: r.ts,
+        method: r.method,
+        url: r.url,
+        type: r.type,
+        status: r.response ? r.response.status : null,
+        bodySize: r.response ? r.response.bodySize : 0,
+        failed: r.failed,
+        postData: r.postData
+      }));
+      fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
+      return { ok: true, count: lines.length, path: filePath };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
   }
 
   /**
@@ -119,6 +373,7 @@ class CDPInterceptor {
    * 清理上一次的 currentVideo，强制只接受目标视频的 video 响应
    */
   beginCollect(awemeId) {
+    logger.info(`[CDP] beginCollect: aid=${awemeId}, instance=${this._instanceId}, totalAids=${Object.keys(this.comments).length}`);
     this.collectTarget = awemeId;
     this.currentVideo = null;
     if (awemeId) {
@@ -146,6 +401,67 @@ class CDPInterceptor {
     }
   }
 
+  /**
+   * 加载完成 - 业务逻辑处理（评论/视频/搜索）
+   * 在 loadingFinished 后调用，此时 body 才可用
+   */
+  async _handleLoadingFinished(webContents, params) {
+    const { requestId } = params;
+    const req = this._requestMap.get(requestId);
+    if (!req || !req.response) return;
+
+    const url = req.url;
+    const isComment = COMMENT_API_PATTERNS.some(p => url.includes(p));
+    const isVideo = VIDEO_API_PATTERNS.some(p => url.includes(p));
+    const isSearch = SEARCH_API_PATTERNS.some(p => url.includes(p));
+
+    if (!isComment && !isVideo && !isSearch) return;
+
+    if (this.processedIds.has(requestId)) return;
+    this.processedIds.add(requestId);
+
+    if (this.processedIds.size > 5000) {
+      const arr = Array.from(this.processedIds);
+      this.processedIds = new Set(arr.slice(-2000));
+    }
+
+    // 获取 body
+    let text = null;
+    if (req.response.body && req.response.bodyType !== 'base64') {
+      text = req.response.body;
+    }
+
+    if (!text) {
+      try {
+        const { body, base64Encoded } = await webContents.debugger.sendCommand(
+          'Network.getResponseBody', { requestId }
+        );
+        if (!body) return;
+        text = base64Encoded ? Buffer.from(body, 'base64').toString('utf-8') : body;
+      } catch (e) {
+        logger.warn(`[CDP] getResponseBody失败(loadingFinished): ${e.message}, url=${url.substring(0, 80)}`);
+        return;
+      }
+    }
+
+    if (isComment) {
+      logger.info(`[CDP] 评论API拦截: url=${url.substring(0, 80)}, bodyLen=${text ? text.length : 0}`);
+    }
+
+    try {
+      const data = JSON.parse(text);
+      if (isComment) this._parseCommentResponse(url, data);
+      if (isVideo) this._parseVideoResponse(data);
+      if (isSearch) this._parseSearchResponse(data);
+    } catch (e) {
+      logger.warn(`[CDP] 业务解析失败(loadingFinished): ${e.message}, url=${url.substring(0, 80)}`);
+    }
+  }
+
+  /**
+   * 响应到达时的业务处理（已移到 _handleLoadingFinished）
+   * 保留此方法以防向后兼容，但不再主动调用
+   */
   async _handleResponseReceived(webContents, params) {
     const { requestId, response } = params;
     const url = response.url;
@@ -158,26 +474,38 @@ class CDPInterceptor {
       this.processedIds = new Set(arr.slice(-2000));
     }
 
+    const isComment = COMMENT_API_PATTERNS.some(p => url.includes(p));
+    const isVideo = VIDEO_API_PATTERNS.some(p => url.includes(p));
+    const isSearch = SEARCH_API_PATTERNS.some(p => url.includes(p));
+
+    if (!isComment && !isVideo && !isSearch) return;
+
+    // 优先从全量抓包缓存中取 body（避免重复 getResponseBody）
+    const cached = this._requestMap.get(requestId);
+    let text = null;
+    if (cached && cached.response && cached.response.body && !cached.response.base64Encoded) {
+      text = cached.response.body;
+    }
+
+    if (!text) {
+      try {
+        const { body, base64Encoded } = await webContents.debugger.sendCommand(
+          'Network.getResponseBody', { requestId }
+        );
+        if (!body) return;
+        text = base64Encoded ? Buffer.from(body, 'base64').toString('utf-8') : body;
+      } catch (e) {
+        return; // CDP 请求可能已过期
+      }
+    }
+
     try {
-      const isComment = COMMENT_API_PATTERNS.some(p => url.includes(p));
-      const isVideo = VIDEO_API_PATTERNS.some(p => url.includes(p));
-      const isSearch = SEARCH_API_PATTERNS.some(p => url.includes(p));
-
-      if (!isComment && !isVideo && !isSearch) return;
-
-      const { body, base64Encoded } = await webContents.debugger.sendCommand(
-        'Network.getResponseBody', { requestId }
-      );
-      if (!body) return;
-
-      const text = base64Encoded ? Buffer.from(body, 'base64').toString('utf-8') : body;
       const data = JSON.parse(text);
-
       if (isComment) this._parseCommentResponse(url, data);
       if (isVideo) this._parseVideoResponse(data);
       if (isSearch) this._parseSearchResponse(data);
     } catch (e) {
-      // CDP 请求可能已过期，静默忽略
+      // JSON 解析失败，静默忽略
     }
   }
 
@@ -186,9 +514,23 @@ class CDPInterceptor {
     try {
       const u = new URL(url);
       aid = u.searchParams.get('aweme_id') || '';
-    } catch (e) {}
+    } catch (e) {
+      logger.warn(`[CDP] 评论URL解析失败: ${e.message}, url=${url.substring(0, 100)}`);
+    }
 
-    // 评论发布 API
+    if (!aid) {
+      logger.warn(`[CDP] 评论API无aweme_id: url=${url.substring(0, 100)}`);
+      return;
+    }
+
+    // ★ 修正aid：如果collectTarget已设置且和URL中的aid不同，用collectTarget覆盖
+    // 避免评论被归到错误的视频下（抖音评论API URL中的aweme_id可能是上一个视频的）
+    if (this.collectTarget && this.collectTarget !== aid) {
+      logger.info(`[CDP] 评论aid修正: ${aid} -> ${this.collectTarget} (collectTarget)`);
+      aid = this.collectTarget;
+    }
+
+    logger.info(`[CDP] 评论解析开始: aid=${aid}, hasComments=${!!data.comments}, hasData=${!!data.data}, topKeys=${Object.keys(data).slice(0, 5).join(',')}`);
     if (url.includes('/comment/publish')) {
       const statusCode = data.status_code || data.status;
       if (statusCode === 0) {
@@ -215,13 +557,12 @@ class CDPInterceptor {
       }
     }
 
-    if (!aid && commentsData.length > 0) {
-      for (const c of commentsData) {
-        if (c.aweme_id) { aid = c.aweme_id; break; }
-      }
+    if (commentsData.length === 0) {
+      // 尝试从 status_code 判断
+      const sc = data.status_code || data.status;
+      logger.info(`[CDP] 评论数据为空: aid=${aid}, status_code=${sc}, keys=${Object.keys(data).join(',')}`);
+      return;
     }
-
-    if (!aid || commentsData.length === 0) return;
 
     let videoDesc = '';
     let videoAuthor = '';
@@ -243,10 +584,14 @@ class CDPInterceptor {
       const uniqueId = String(user.unique_id || '');
       const douyinId = uniqueId || shortId || uid;
 
+      // 毫秒检测：抖音API有时返回毫秒级时间戳
+      let ct = c.create_time || 0;
+      if (ct > 10000000000) ct = Math.floor(ct / 1000);
+
       const comment = {
         comment_id: String(c.cid || ''),
         text: c.text || '',
-        create_time: c.create_time || 0,
+        create_time: ct,
         uid,
         sec_uid: secUid,
         douyin_id: douyinId,
@@ -266,9 +611,16 @@ class CDPInterceptor {
 
       if (!this.comments[aid].some(c2 => c2.comment_id === comment.comment_id)) {
         this.comments[aid].push(comment);
+        // 同步写入全局缓存
+        _globalTouchKey(aid);
+        if (!_globalComments[aid]) _globalComments[aid] = [];
+        if (!_globalComments[aid].some(c2 => c2.comment_id === comment.comment_id)) {
+          _globalComments[aid].push({...comment});
+        }
         if (this.onComment) this.onComment(comment);
       }
     }
+    logger.info(`[CDP] 评论解析完成: aid=${aid}, count=${this.comments[aid].length}, parsed=${commentsData.length}, instance=${this._instanceId}, totalAids=${Object.keys(this.comments).length}`);
   }
 
   _parseVideoResponse(data) {
@@ -303,6 +655,12 @@ class CDPInterceptor {
             });
           }
         }
+        // LRU 淘汰：超过 500 个时删除最早的
+        while (this.feedCache.size > 500) {
+          const firstKey = this.feedCache.keys().next().value;
+          if (firstKey !== undefined) this.feedCache.delete(firstKey);
+          else break;
+        }
         logger.info(`Feed 缓存更新，共 ${this.feedCache.size} 个视频`);
       }
     } catch (e) {}
@@ -323,13 +681,34 @@ class CDPInterceptor {
           });
         }
       }
+      // 搜索结果上限：超过 200 条时从头部删除
+      while (this.searchVideos.length > 200) {
+        this.searchVideos.shift();
+      }
     } catch (e) {}
   }
 
   getComments(awemeId) {
     if (awemeId) {
       this._touchKey(awemeId);
-      return (this.comments[awemeId] || []).slice();
+      let result = (this.comments[awemeId] || []).slice();
+      // 如果实例缓存为空，尝试全局缓存兜底
+      if (result.length === 0) {
+        const globalResult = getGlobalComments(awemeId);
+        if (globalResult.length > 0) {
+          logger.info(`[CDP] getComments从全局缓存恢复: aid=${awemeId}, count=${globalResult.length}, instance=${this._instanceId}`);
+          // 回填实例缓存
+          this.comments[awemeId] = globalResult.map(c => ({...c}));
+          result = globalResult;
+        }
+      }
+      if (result.length === 0) {
+        const keys = Object.keys(this.comments);
+        logger.info(`[CDP] getComments空: aid=${awemeId}, instance=${this._instanceId}, totalAids=${keys.length}, existingKeys=${keys.slice(0, 5).join(',')}`);
+      } else {
+        logger.info(`[CDP] getComments命中: aid=${awemeId}, count=${result.length}, instance=${this._instanceId}`);
+      }
+      return result;
     }
     return [];
   }
@@ -394,12 +773,12 @@ class CDPInterceptor {
   }
 
   _cleanup() {
-    this.comments = {};
-    this.commentKeys = [];
+    // 注意：不清空 this.comments 和 this.commentKeys，因为CDP重连时评论数据仍有效
     this.searchVideos = [];
-    this.currentVideo = null;
-    this.collectTarget = null;
     this.processedIds = new Set();
+    this.allRequests = [];
+    this._requestMap.clear();
+    this._stats = { total: 0, byDomain: {}, byMethod: {}, byStatus: {} };
     if (this._webContents) {
       try {
         if (this._messageHandler) this._webContents.debugger.off('message', this._messageHandler);
@@ -412,4 +791,31 @@ class CDPInterceptor {
   }
 }
 
+// ===== 全局评论缓存（跨实例兜底） =====
+// 即使 CDPInterceptor 实例被重建，评论数据仍可从这里找回
+const _globalComments = {};
+const _globalCommentKeys = [];
+const MAX_GLOBAL_VIDEOS = 200;
+
+function _globalTouchKey(awemeId) {
+  const idx = _globalCommentKeys.indexOf(awemeId);
+  if (idx >= 0) _globalCommentKeys.splice(idx, 1);
+  _globalCommentKeys.push(awemeId);
+  while (_globalCommentKeys.length > MAX_GLOBAL_VIDEOS) {
+    const old = _globalCommentKeys.shift();
+    delete _globalComments[old];
+  }
+}
+
+function getGlobalComments(awemeId) {
+  return _globalComments[awemeId] ? _globalComments[awemeId].slice() : [];
+}
+
+function clearGlobalComments() {
+  Object.keys(_globalComments).forEach(k => delete _globalComments[k]);
+  _globalCommentKeys.length = 0;
+}
+
 module.exports = CDPInterceptor;
+module.exports.getGlobalComments = getGlobalComments;
+module.exports.clearGlobalComments = clearGlobalComments;

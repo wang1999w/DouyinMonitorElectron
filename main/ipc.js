@@ -28,7 +28,11 @@ let wechatModule = null;
 let notifier = null;
 let searchEngine = null;
 let monitorEngine = null;
+let recommendEngine = null;
+let xhsSearchEngine = null;
+let xhsMonitorEngine = null;
 let statsTimer = null;
+let xhsStatsTimer = null;
 
 let dbReady = false;
 
@@ -46,6 +50,9 @@ function loadCoreModules() {
     notifier = require('../core/notifier');
     searchEngine = require('../core/search');
     monitorEngine = require('../core/monitor');
+    recommendEngine = require('../core/recommend');
+    xhsSearchEngine = require('../core/search-xhs');
+    xhsMonitorEngine = require('../core/monitor-xhs');
   }
 }
 
@@ -160,6 +167,30 @@ function registerIpcHandlers(mainWindow) {
     return { success: true };
   });
 
+  // ========== 推荐 ==========
+  ipcMain.handle('start-recommend', (event, params) => {
+    loadCoreModules();
+    recommendEngine.startRecommend(
+      params,
+      (msg) => mainWindow.webContents.send('recommend-log', msg),
+      (result) => mainWindow.webContents.send('recommend-result', result),
+      (progress) => mainWindow.webContents.send('recommend-progress', progress)
+    );
+    return { success: true };
+  });
+
+  ipcMain.handle('stop-recommend', () => {
+    loadCoreModules();
+    recommendEngine.stopRecommend();
+    return { success: true };
+  });
+
+  ipcMain.handle('pause-recommend', () => {
+    loadCoreModules();
+    recommendEngine.pauseRecommend();
+    return { success: true };
+  });
+
   // ========== 意向评论查询（分页） ==========
   ipcMain.handle('get-matches-page', (event, { offset, limit, filter }) => {
     loadCoreModules();
@@ -232,8 +263,225 @@ function registerIpcHandlers(mainWindow) {
     return { success: true };
   });
 
+  // ========== 平台切换 ==========
+  const { createXHSWindow, getXHSWindow, getXHSView, getXHSCdpInterceptor, updateXHSViewBounds } = require('./window');
+
+  ipcMain.handle('switch-platform', (event, platform) => {
+    if (platform === 'xhs') {
+      const xhsWin = createXHSWindow();
+      if (xhsWin) {
+        xhsWin.show();
+        xhsWin.focus();
+      }
+      return { success: true, platform: 'xhs' };
+    }
+    // 切回抖音 - 聚焦主窗口
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+    return { success: true, platform: 'douyin' };
+  });
+
+  ipcMain.handle('xhs-show-window', () => {
+    const xhsWin = getXHSWindow();
+    if (xhsWin && !xhsWin.isDestroyed()) {
+      xhsWin.show();
+      xhsWin.focus();
+    } else {
+      createXHSWindow();
+    }
+    return { success: true };
+  });
+
+  // ========== 小红书搜索 ==========
+  ipcMain.handle('xhs-start-search', (event, params) => {
+    loadCoreModules();
+    const xhsWin = getXHSWindow();
+    xhsSearchEngine.startSearch(
+      params,
+      (msg) => xhsWin && !xhsWin.isDestroyed() && xhsWin.webContents.send('xhs-search-log', msg),
+      (result) => xhsWin && !xhsWin.isDestroyed() && xhsWin.webContents.send('xhs-search-result', result),
+      (progress) => xhsWin && !xhsWin.isDestroyed() && xhsWin.webContents.send('xhs-search-progress', progress),
+      () => getXHSView(),
+      () => getXHSCdpInterceptor()
+    );
+    return { success: true };
+  });
+
+  ipcMain.handle('xhs-stop-search', () => {
+    loadCoreModules();
+    xhsSearchEngine.stopSearch();
+    return { success: true };
+  });
+
+  ipcMain.handle('xhs-pause-search', () => {
+    loadCoreModules();
+    xhsSearchEngine.pauseSearch();
+    return { success: true };
+  });
+
+  // ========== 小红书监控 ==========
+  ipcMain.handle('xhs-start-monitor', () => {
+    loadCoreModules();
+    const xhsWin = getXHSWindow();
+    xhsMonitorEngine.startMonitor(
+      (msg) => xhsWin && !xhsWin.isDestroyed() && xhsWin.webContents.send('xhs-monitor-log', msg),
+      (result) => xhsWin && !xhsWin.isDestroyed() && xhsWin.webContents.send('xhs-monitor-result', result),
+      (progress) => xhsWin && !xhsWin.isDestroyed() && xhsWin.webContents.send('xhs-monitor-progress', progress),
+      () => getXHSView(),
+      () => getXHSCdpInterceptor()
+    );
+    return { success: true };
+  });
+
+  ipcMain.handle('xhs-stop-monitor', () => {
+    loadCoreModules();
+    xhsMonitorEngine.stopMonitor();
+    return { success: true };
+  });
+
+  // ========== 小红书博主管理 ==========
+  ipcMain.handle('xhs-add-blogger', (event, blogger) => {
+    loadCoreModules();
+    const cfg = config.loadConfig();
+    cfg.xhs_monitor_bloggers = cfg.xhs_monitor_bloggers || [];
+    if (blogger.user_id) {
+      const exists = cfg.xhs_monitor_bloggers.some(b => b.user_id === blogger.user_id);
+      if (exists) return { success: false, error: '该博主已在监控列表中' };
+    }
+    cfg.xhs_monitor_bloggers.push(blogger);
+    config.saveConfig(cfg);
+    return { success: true };
+  });
+
+  ipcMain.handle('xhs-update-blogger', (event, { userId, updates }) => {
+    loadCoreModules();
+    const cfg = config.loadConfig();
+    cfg.xhs_monitor_bloggers = cfg.xhs_monitor_bloggers || [];
+    const idx = cfg.xhs_monitor_bloggers.findIndex(b => b.user_id === userId);
+    if (idx < 0) return { success: false, error: '博主不存在' };
+    cfg.xhs_monitor_bloggers[idx] = { ...cfg.xhs_monitor_bloggers[idx], ...updates };
+    config.saveConfig(cfg);
+    return { success: true };
+  });
+
+  ipcMain.handle('xhs-del-blogger', (event, identifier) => {
+    loadCoreModules();
+    const cfg = config.loadConfig();
+    if (!cfg.xhs_monitor_bloggers) return { success: true };
+    if (typeof identifier === 'number') {
+      if (cfg.xhs_monitor_bloggers[identifier]) cfg.xhs_monitor_bloggers.splice(identifier, 1);
+    } else if (typeof identifier === 'string') {
+      cfg.xhs_monitor_bloggers = cfg.xhs_monitor_bloggers.filter(b => b.user_id !== identifier);
+    }
+    config.saveConfig(cfg);
+    return { success: true };
+  });
+
+  // ========== 小红书统计 ==========
+  ipcMain.handle('xhs-get-stats', async () => {
+    await ensureDbReady();
+    return database.getXHSStats();
+  });
+
+  ipcMain.handle('xhs-get-matches-page', (event, { offset, limit, filter }) => {
+    loadCoreModules();
+    return {
+      items: database.getXHSRecentMatchesPage(offset || 0, limit || 50, filter || {}),
+      total: database.getXHSMatchesCount(filter || {})
+    };
+  });
+
+  ipcMain.handle('xhs-clear-matches', () => {
+    loadCoreModules();
+    database.clearXHSIntentComments();
+    return { success: true };
+  });
+
+  // ========== 小红书 BrowserView 显示/隐藏（弹窗防遮挡） ==========
+  ipcMain.handle('xhs-hide-view', () => {
+    const xhsView = getXHSView();
+    const xhsWin = getXHSWindow();
+    if (xhsView && xhsWin) {
+      try { xhsWin.removeBrowserView(xhsView); } catch (e) {}
+    }
+    return { success: true };
+  });
+
+  ipcMain.handle('xhs-show-view', () => {
+    const xhsView = getXHSView();
+    const xhsWin = getXHSWindow();
+    if (xhsView && xhsWin) {
+      try { xhsWin.setBrowserView(xhsView); updateXHSViewBounds(); } catch (e) {}
+    }
+    return { success: true };
+  });
+
+  // ========== 小红书推荐页浏览 ==========
+  ipcMain.handle('xhs-start-recommend', (event, params) => {
+    loadCoreModules();
+    const xhsRecommend = require('../core/recommend-xhs');
+    const xhsWin = getXHSWindow();
+    xhsRecommend.startRecommend(
+      params,
+      (msg) => { if (xhsWin && !xhsWin.isDestroyed()) xhsWin.webContents.send('xhs-recommend-log', msg); },
+      (result) => { if (xhsWin && !xhsWin.isDestroyed()) xhsWin.webContents.send('xhs-recommend-result', result); },
+      (progress) => { if (xhsWin && !xhsWin.isDestroyed()) xhsWin.webContents.send('xhs-recommend-progress', progress); },
+      () => getXHSView(),
+      () => getXHSCdpInterceptor()
+    );
+    return { success: true };
+  });
+
+  ipcMain.handle('xhs-stop-recommend', () => {
+    loadCoreModules();
+    const xhsRecommend = require('../core/recommend-xhs');
+    xhsRecommend.stopRecommend();
+    return { success: true };
+  });
+
+  ipcMain.handle('xhs-pause-recommend', () => {
+    loadCoreModules();
+    const xhsRecommend = require('../core/recommend-xhs');
+    xhsRecommend.pauseRecommend();
+    return { success: true };
+  });
+
+  // ========== 小红书数据导出 ==========
+  ipcMain.handle('xhs-export-results', async () => {
+    loadCoreModules();
+    try {
+      const items = database.getXHSRecentMatchesPage(0, 10000, {});
+      const { dialog } = require('electron');
+      const result = await dialog.showSaveDialog({
+        title: '导出小红书意向评论',
+        defaultPath: `xhs-intent-comments-${new Date().toISOString().slice(0,10)}.json`,
+        filters: [
+          { name: 'JSON', extensions: ['json'] },
+          { name: 'CSV', extensions: ['csv'] }
+        ]
+      });
+      if (result.canceled) return { success: false, error: '已取消' };
+      const fs = require('fs');
+      if (result.filePath.endsWith('.csv')) {
+        const header = '昵称,评论内容,意向词,评分,笔记标题,笔记链接,评论时间,采集时间\n';
+        const rows = items.map(r =>
+          `"${(r.nickname||'').replace(/"/g,'""')}","${(r.comment_text||'').replace(/"/g,'""')}","${(r.matched_keywords||'').replace(/"/g,'""')}","${r.score||0}","${(r.note_title||'').replace(/"/g,'""')}","${r.note_url||''}","${r.comment_time||''}","${r.capture_time||''}"`
+        ).join('\n');
+        fs.writeFileSync(result.filePath, '\uFEFF' + header + rows, 'utf-8');
+      } else {
+        fs.writeFileSync(result.filePath, JSON.stringify(items, null, 2), 'utf-8');
+      }
+      return { success: true, path: result.filePath, count: items.length };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
+
   // ========== 启动 stats 主动推送 ==========
   startStatsBroadcaster(mainWindow);
+  startXHSStatsBroadcaster();
 }
 
 /**
@@ -250,8 +498,25 @@ function startStatsBroadcaster(mainWindow) {
   }, 5000);
 }
 
+/**
+ * 定时推送小红书 stats 给小红书渲染进程（5 秒一次）
+ */
+function startXHSStatsBroadcaster() {
+  if (xhsStatsTimer) clearInterval(xhsStatsTimer);
+  const { getXHSWindow } = require('./window');
+  xhsStatsTimer = setInterval(() => {
+    const xhsWin = getXHSWindow();
+    if (!xhsWin || xhsWin.isDestroyed()) return;
+    if (!database) return;
+    try {
+      xhsWin.webContents.send('xhs-stats-updated', database.getXHSStats());
+    } catch (e) {}
+  }, 5000);
+}
+
 function stopStatsBroadcaster() {
   if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
+  if (xhsStatsTimer) { clearInterval(xhsStatsTimer); xhsStatsTimer = null; }
 }
 
 /**

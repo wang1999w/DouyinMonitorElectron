@@ -28,14 +28,25 @@ function processComment(cdpComment, domComment, videoInfo, keywords) {
   if (!merged || !merged.text || merged.text.length < 3) return null;
   if (isDuplicate(merged)) return null;
 
+  // 毫秒检测：确保create_time是秒级时间戳
+  if (merged.create_time > 10000000000) {
+    merged.create_time = Math.floor(merged.create_time / 1000);
+  }
+
   const [matched, matchedKeywords, isGarbage] = matchIntent(
     merged.text, keywords.intent || [], keywords.garbage || []
   );
+
+  // 调试日志：记录匹配详情
+  if (!matched && !isGarbage && merged.text.length >= 3) {
+    logger.debug(`[未命中] "${merged.text.slice(0, 30)}" intent词数=${(keywords.intent || []).length}`);
+  }
+
   if (!matched || isGarbage) return null;
 
   const score = calcCommentScore(merged.create_time);
 
-  // 构建完整数据（DOM 评论补全所有字段）
+  // 构建完整数据（CDP + DOM 合并，补全所有字段）
   const result = {
     comment_id: merged.comment_id || generateId(),
     uid: merged.uid || merged.douyin_id || '',
@@ -45,6 +56,7 @@ function processComment(cdpComment, domComment, videoInfo, keywords) {
     create_time: merged.create_time || 0,
     profile_url: merged.profile_url || '',
     douyin_id: merged.douyin_id || merged.uid || '',
+    sec_uid: merged.sec_uid || '',
     aweme_id: videoInfo.aweme_id || merged.aweme_id || '',
     video_desc: videoInfo.desc || merged.video_desc || '未采集',
     video_author: videoInfo.author || merged.video_author || '未采集',
@@ -54,10 +66,22 @@ function processComment(cdpComment, domComment, videoInfo, keywords) {
     score: score,
     digg_count: merged.digg_count || 0,
     reply_count: merged.reply_comment_total || 0,
-    source: cdpComment ? 'api' : 'dom'
+    like_count: merged.like_count || 0,
+    note_id: merged.note_id || '',
+    note_title: merged.note_title || '',
+    note_author: merged.note_author || '',
+    note_url: merged.note_url || '',
+    platform: merged.platform || '',
+    source: merged.source || (cdpComment ? 'api' : 'dom')
   };
 
-  database.addIntentComment(result);
+  // 判断平台，选择对应数据库表
+  const isXHS = result.platform === 'xhs' || merged.note_id;
+  if (isXHS) {
+    database.addXHSIntentComment(result);
+  } else {
+    database.addIntentComment(result);
+  }
   notifier.notify(result).catch(e => logger.warn(`推送失败: ${e.message}`));
   logger.info(`[命中] ${result.nickname}: ${result.text.slice(0, 30)} -> ${matchedKeywords.join(',')} (${result.source})`);
   return result;
@@ -86,8 +110,14 @@ function mergeCommentData(cdp, dom) {
     video_desc: cdp.video_desc || dom.video_desc || '',
     video_author: cdp.video_author || dom.video_author || '',
     video_url: cdp.video_url || dom.video_url || '',
-    digg_count: cdp.digg_count || 0,
-    reply_comment_total: cdp.reply_comment_total || 0,
+    digg_count: cdp.digg_count || dom.digg_count || 0,
+    reply_comment_total: cdp.reply_comment_total || dom.reply_comment_total || 0,
+    like_count: cdp.like_count || dom.like_count || 0,
+    note_id: cdp.note_id || dom.note_id || '',
+    note_title: cdp.note_title || dom.note_title || '',
+    note_author: cdp.note_author || dom.note_author || '',
+    note_url: cdp.note_url || dom.note_url || '',
+    platform: cdp.platform || dom.platform || '',
     source: 'merged'
   };
 }
@@ -144,14 +174,22 @@ function generateId() {
 
 /**
  * 格式化推送消息
- * 包含所有采集字段的完整排版
+ * 根据平台自动选择对应模板，包含平台标识
  */
 function formatNotifyMessage(item) {
+  const isXHS = item.platform === 'xhs' || item.note_id;
+  return isXHS ? formatXHSNotifyMessage(item) : formatDouyinNotifyMessage(item);
+}
+
+/**
+ * 抖音推送模板 - 标识 [DY]
+ */
+function formatDouyinNotifyMessage(item) {
   const score = item.score || 0;
   const prefix = score >= 10 ? '🔴【加急】' : score >= 5 ? '🟡【意向】' : '🟢【匹配】';
 
   let lines = [
-    `${prefix} <b>抖音意向评论</b>`,
+    `${prefix} <b>[DY] 抖音意向评论</b>`,
     ``,
     `<b>📝 评论内容：</b>${item.text || ''}`,
     `<b>👤 用户昵称：</b>${item.nickname || ''}`,
@@ -164,6 +202,38 @@ function formatNotifyMessage(item) {
     `<b>🎬 视频文案：</b>${(item.video_desc || '').slice(0, 80)}`,
     `<b>👤 博主名称：</b>${item.video_author || ''}`,
     `<b>🔗 视频链接：</b><a href="${item.video_url || ''}">${item.video_url || ''}</a>`,
+  ];
+
+  if (item.profile_url) {
+    lines.push(`<b>🏠 用户主页：</b><a href="${item.profile_url}">${item.profile_url}</a>`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 小红书推送模板 - 标识 [XHS]
+ * 独立设计，字段适配小红书（笔记标题、笔记作者、笔记链接等）
+ */
+function formatXHSNotifyMessage(item) {
+  const score = item.score || 0;
+  const prefix = score >= 10 ? '🔴【加急】' : score >= 5 ? '🟡【意向】' : '🟢【匹配】';
+
+  let lines = [
+    `${prefix} <b>[XHS] 小红书意向评论</b>`,
+    ``,
+    `<b>📝 评论内容：</b>${item.text || ''}`,
+    `<b>👤 用户昵称：</b>${item.nickname || ''}`,
+    `<b>🆔 用户ID：</b>${item.uid || '无'}`,
+    `<b>📍 IP属地：</b>${item.ip_label || '未知'}`,
+    `<b>⏱️ 评论时间：</b>${formatTime(item.create_time)}`,
+    `<b>🏷️ 命中关键词：</b><span style="color:red">${(item.matched_keywords || []).join(', ')}</span>`,
+    `<b>📊 时效评分：</b>${score}分`,
+    `<b>👍 点赞数：</b>${item.like_count || 0}`,
+    ``,
+    `<b>📖 笔记标题：</b>${(item.note_title || item.video_desc || '').slice(0, 80)}`,
+    `<b>✍️ 笔记作者：</b>${item.note_author || item.video_author || ''}`,
+    `<b>🔗 笔记链接：</b><a href="${item.note_url || item.video_url || ''}">${item.note_url || item.video_url || ''}</a>`,
   ];
 
   if (item.profile_url) {

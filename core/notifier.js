@@ -68,7 +68,7 @@ async function sendUrgent(item, reason) {
     comment_text: `程序检测到异常：${reason}\n\n需要人工干预处理。`,
     matched_keywords: '系统通知',
     score: 10,
-    video_author: '抖音监控系统',
+    video_author: 'CW自媒体监控系统',
     video_url: 'https://www.douyin.com/'
   };
 

@@ -1,0 +1,3 @@
+{
+  "script": "(function(){ var mask = document.querySelector('.note-detail-mask'); if (!mask) return { hasMask: false }; var closeBtns = mask.querySelectorAll('[class*=\"close\"], [class*=\"Close\"], button, svg'); var info = Array.from(closeBtns).map(el => ({ tag: el.tagName, class: el.className.toString().substring(0, 80), rect: (function(){ var r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) }; })() })); return { hasMask: true, closeBtns: info }; })()"
+}

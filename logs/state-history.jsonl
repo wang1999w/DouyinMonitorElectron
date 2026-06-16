@@ -1,0 +1,129 @@
+{"ts":1781567145336,"time":"2026/6/16 07:45:45","action":"transition","from":"idle","to":"searching","phase":"test","taskId":null,"taskDesc":null}
+{"ts":1781567145337,"time":"2026/6/16 07:45:45","action":"force_reset","from":"searching","to":"idle","phase":"idle","taskId":null,"taskDesc":null,"reason":"test"}
+{"ts":1781567895030,"time":"2026/6/16 07:58:15","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781567895029","taskDesc":"美女"}
+{"ts":1781567919858,"time":"2026/6/16 07:58:39","action":"transition","from":"searching","to":"paused","phase":"user_paused","taskId":"search_1781567895029","taskDesc":"美女"}
+{"ts":1781567924557,"time":"2026/6/16 07:58:44","action":"transition","from":"paused","to":"idle","phase":"completed","taskId":"search_1781567895029","taskDesc":"美女"}
+{"ts":1781568288243,"time":"2026/6/16 08:04:48","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781568288243","taskDesc":"美女"}
+{"ts":1781568328752,"time":"2026/6/16 08:05:28","action":"transition","from":"searching","to":"idle","phase":"stopped","taskId":"search_1781568288243","taskDesc":"美女"}
+{"ts":1781571134520,"time":"2026/6/16 08:52:14","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781571134520","taskDesc":"双眼皮"}
+{"ts":1781571157438,"time":"2026/6/16 08:52:37","action":"transition","from":"searching","to":"paused","phase":"user_paused","taskId":"search_1781571134520","taskDesc":"双眼皮"}
+{"ts":1781571158415,"time":"2026/6/16 08:52:38","action":"transition","from":"paused","to":"idle","phase":"completed","taskId":"search_1781571134520","taskDesc":"双眼皮"}
+{"ts":1781571485788,"time":"2026/6/16 08:58:05","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781571485788","taskDesc":"隆鼻"}
+{"ts":1781571601373,"time":"2026/6/16 09:00:01","action":"transition","from":"searching","to":"idle","phase":"stopped","taskId":"search_1781571485788","taskDesc":"隆鼻"}
+{"ts":1781583003947,"time":"2026/6/16 12:10:03","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781583003947","taskDesc":"#双眼皮"}
+{"ts":1781583454002,"time":"2026/6/16 12:17:34","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781583003947","taskDesc":"#双眼皮"}
+{"ts":1781583505950,"time":"2026/6/16 12:18:25","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781583505950","taskDesc":"双眼皮"}
+{"ts":1781583553211,"time":"2026/6/16 12:19:13","action":"transition","from":"searching","to":"idle","phase":"stopped","taskId":"search_1781583505950","taskDesc":"双眼皮"}
+{"ts":1781584303156,"time":"2026/6/16 12:31:43","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781584303156","taskDesc":"双眼皮"}
+{"ts":1781584626083,"time":"2026/6/16 12:37:06","action":"transition","from":"searching","to":"idle","phase":"stopped","taskId":"search_1781584303156","taskDesc":"双眼皮"}
+{"ts":1781587129723,"time":"2026/6/16 13:18:49","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781587129723","taskDesc":"双眼皮"}
+{"ts":1781587369325,"time":"2026/6/16 13:22:49","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781587129723","taskDesc":"双眼皮"}
+{"ts":1781587637590,"time":"2026/6/16 13:27:17","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781587637590","taskDesc":"双眼皮"}
+{"ts":1781587870152,"time":"2026/6/16 13:31:10","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781587637590","taskDesc":"双眼皮"}
+{"ts":1781588736320,"time":"2026/6/16 13:45:36","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781588736319","taskDesc":"???"}
+{"ts":1781589001278,"time":"2026/6/16 13:50:01","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781588736319","taskDesc":"???"}
+{"ts":1781589294244,"time":"2026/6/16 13:54:54","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781589294244","taskDesc":"双眼皮"}
+{"ts":1781589517967,"time":"2026/6/16 13:58:37","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781589294244","taskDesc":"双眼皮"}
+{"ts":1781589575271,"time":"2026/6/16 13:59:35","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781589575271","taskDesc":"双眼皮"}
+{"ts":1781589634649,"time":"2026/6/16 14:00:34","action":"transition","from":"searching","to":"idle","phase":"stopped","taskId":"search_1781589575271","taskDesc":"双眼皮"}
+{"ts":1781589651297,"time":"2026/6/16 14:00:51","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781589651297","taskDesc":"双眼皮"}
+{"ts":1781589950790,"time":"2026/6/16 14:05:50","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781589651297","taskDesc":"双眼皮"}
+{"ts":1781590029065,"time":"2026/6/16 14:07:09","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781590029065","taskDesc":"双眼皮"}
+{"ts":1781590284579,"time":"2026/6/16 14:11:24","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781590029065","taskDesc":"双眼皮"}
+{"ts":1781592964651,"time":"2026/6/16 14:56:04","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781592964651","taskDesc":"双眼皮"}
+{"ts":1781593171033,"time":"2026/6/16 14:59:31","action":"transition","from":"searching","to":"paused","phase":"user_paused","taskId":"search_1781592964651","taskDesc":"双眼皮"}
+{"ts":1781593287628,"time":"2026/6/16 15:01:27","action":"transition","from":"paused","to":"idle","phase":"completed","taskId":"search_1781592964651","taskDesc":"双眼皮"}
+{"ts":1781596100787,"time":"2026/6/16 15:48:20","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781596100787","taskDesc":"搜索"}
+{"ts":1781596100789,"time":"2026/6/16 15:48:20","action":"error","from":"searching","to":"searching","phase":"starting","taskId":"search_1781596100787","taskDesc":"搜索","error":"Cannot read properties of undefined (reading 'join')","category":"data_missing"}
+{"ts":1781596192529,"time":"2026/6/16 15:49:52","action":"recovery_from_crash","from":"searching","to":"idle","phase":"starting","taskId":"search_1781596100787","taskDesc":"搜索","reason":"异常退出"}
+{"ts":1781596486249,"time":"2026/6/16 15:54:46","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781596486249","taskDesc":"双眼皮"}
+{"ts":1781596677249,"time":"2026/6/16 15:57:57","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781596486249","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781596969314,"time":"2026/6/16 16:02:49","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781596969314","taskDesc":"双眼皮"}
+{"ts":1781597450320,"time":"2026/6/16 16:10:50","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781596969314","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781602478817,"time":"2026/6/16 17:34:38","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781602478817","taskDesc":"双眼皮"}
+{"ts":1781602654673,"time":"2026/6/16 17:37:34","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781602478817","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781604461444,"time":"2026/6/16 18:07:41","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781604461444","taskDesc":"双眼皮"}
+{"ts":1781604593182,"time":"2026/6/16 18:09:53","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781604461444","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781606402223,"time":"2026/6/16 18:40:02","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781606402223","taskDesc":"双眼皮"}
+{"ts":1781613531826,"time":"2026/6/16 20:38:51","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781606402223","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781613756907,"time":"2026/6/16 20:42:36","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781613756907","taskDesc":"双眼皮"}
+{"ts":1781613953633,"time":"2026/6/16 20:45:53","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781613756907","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781614066496,"time":"2026/6/16 20:47:46","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781614066496","taskDesc":"双眼皮"}
+{"ts":1781614290774,"time":"2026/6/16 20:51:30","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781614066496","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781614418043,"time":"2026/6/16 20:53:38","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781614418043","taskDesc":"双眼皮"}
+{"ts":1781614728394,"time":"2026/6/16 20:58:48","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781614418043","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781614793607,"time":"2026/6/16 20:59:53","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781614793607","taskDesc":"双眼皮"}
+{"ts":1781615083989,"time":"2026/6/16 21:04:43","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781614793607","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781615284746,"time":"2026/6/16 21:08:04","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781615284746","taskDesc":"双眼皮"}
+{"ts":1781617690811,"time":"2026/6/16 21:48:10","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781615284746","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781618978259,"time":"2026/6/16 22:09:38","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781615284746","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781619686099,"time":"2026/6/16 22:21:26","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781615284746","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781620747064,"time":"2026/6/16 22:39:07","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781615284746","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781621272133,"time":"2026/6/16 22:47:52","action":"error","from":"idle","to":"idle","phase":"ready","taskId":"search_1781615284746","taskDesc":"双眼皮","error":"Object has been destroyed","category":"unknown"}
+{"ts":1781621272134,"time":"2026/6/16 22:47:52","action":"transition","from":"idle","to":"recovering","phase":"ready","taskId":"search_1781615284746","taskDesc":"双眼皮","error":"Object has been destroyed","context":{"category":"unknown"}}
+{"ts":1781621272135,"time":"2026/6/16 22:47:52","action":"transition","from":"recovering","to":"idle","phase":"idle","taskId":"search_1781615284746","taskDesc":"双眼皮","context":{}}
+{"ts":1781624702979,"time":"2026/6/16 23:45:02","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781615284746","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781628202144,"time":"2026/6/17 00:43:22","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781628202144","taskDesc":"???"}
+{"ts":1781628250477,"time":"2026/6/17 00:44:10","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781628202144","taskDesc":"???"}
+{"ts":1781628722314,"time":"2026/6/17 00:52:02","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781628722314","taskDesc":"???"}
+{"ts":1781629105613,"time":"2026/6/17 00:58:25","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781628722314","taskDesc":"???","reason":"异常退出"}
+{"ts":1781629242473,"time":"2026/6/17 01:00:42","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781629242473","taskDesc":"???"}
+{"ts":1781629391523,"time":"2026/6/17 01:03:11","action":"transition","from":"searching","to":"idle","phase":"stopped","taskId":"search_1781629242473","taskDesc":"???"}
+{"ts":1781629400632,"time":"2026/6/17 01:03:20","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781629400632","taskDesc":"??"}
+{"ts":1781629610469,"time":"2026/6/17 01:06:50","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781629400632","taskDesc":"??","reason":"异常退出"}
+{"ts":1781629644625,"time":"2026/6/17 01:07:24","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781629644625","taskDesc":"??"}
+{"ts":1781629720081,"time":"2026/6/17 01:08:40","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781629644625","taskDesc":"??","reason":"异常退出"}
+{"ts":1781629808621,"time":"2026/6/17 01:10:08","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781629808621","taskDesc":"??"}
+{"ts":1781629825615,"time":"2026/6/17 01:10:25","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781629808621","taskDesc":"??"}
+{"ts":1781629878243,"time":"2026/6/17 01:11:18","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781629878243","taskDesc":"??"}
+{"ts":1781630106381,"time":"2026/6/17 01:15:06","action":"transition","from":"searching","to":"idle","phase":"stopped","taskId":"search_1781629878243","taskDesc":"??"}
+{"ts":1781630600261,"time":"2026/6/17 01:23:20","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781630600261","taskDesc":"??"}
+{"ts":1781630780834,"time":"2026/6/17 01:26:20","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781630600261","taskDesc":"??","reason":"异常退出"}
+{"ts":1781630976822,"time":"2026/6/17 01:29:36","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781630976822","taskDesc":"??"}
+{"ts":1781631231310,"time":"2026/6/17 01:33:51","action":"error","from":"searching","to":"searching","phase":"processing_video","taskId":"search_1781630600261","taskDesc":"??","error":"Object has been destroyed","category":"unknown"}
+{"ts":1781631231311,"time":"2026/6/17 01:33:51","action":"transition","from":"searching","to":"recovering","phase":"processing_video","taskId":"search_1781630600261","taskDesc":"??","error":"Object has been destroyed","context":{"category":"unknown"}}
+{"ts":1781631231311,"time":"2026/6/17 01:33:51","action":"transition","from":"recovering","to":"idle","phase":"idle","taskId":"search_1781630600261","taskDesc":"??","context":{}}
+{"ts":1781631251821,"time":"2026/6/17 01:34:11","action":"error","from":"searching","to":"searching","phase":"processing_video","taskId":"search_1781630976822","taskDesc":"??","error":"Object has been destroyed","category":"unknown"}
+{"ts":1781631251822,"time":"2026/6/17 01:34:11","action":"transition","from":"searching","to":"recovering","phase":"processing_video","taskId":"search_1781630976822","taskDesc":"??","error":"Object has been destroyed","context":{"category":"unknown"}}
+{"ts":1781631251823,"time":"2026/6/17 01:34:11","action":"transition","from":"recovering","to":"idle","phase":"idle","taskId":"search_1781630976822","taskDesc":"??","context":{}}
+{"ts":1781631258144,"time":"2026/6/17 01:34:18","action":"error","from":"idle","to":"idle","phase":"video_done","taskId":"search_1781630976822","taskDesc":"??","error":"Object has been destroyed","category":"unknown"}
+{"ts":1781631522855,"time":"2026/6/17 01:38:42","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781631522855","taskDesc":"双眼皮"}
+{"ts":1781631781527,"time":"2026/6/17 01:43:01","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781631522855","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781631880540,"time":"2026/6/17 01:44:40","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781631522855","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781632000794,"time":"2026/6/17 01:46:40","action":"transition","from":"searching","to":"paused","phase":"user_paused","taskId":"search_1781631522855","taskDesc":"双眼皮"}
+{"ts":1781632002376,"time":"2026/6/17 01:46:42","action":"transition","from":"paused","to":"idle","phase":"completed","taskId":"search_1781631522855","taskDesc":"双眼皮"}
+{"ts":1781632008357,"time":"2026/6/17 01:46:48","action":"error","from":"idle","to":"idle","phase":"completed","taskId":"search_1781631522855","taskDesc":"双眼皮","error":"Object has been destroyed","category":"unknown"}
+{"ts":1781632008358,"time":"2026/6/17 01:46:48","action":"transition","from":"idle","to":"recovering","phase":"completed","taskId":"search_1781631522855","taskDesc":"双眼皮","error":"Object has been destroyed","context":{"category":"unknown"}}
+{"ts":1781632008359,"time":"2026/6/17 01:46:48","action":"transition","from":"recovering","to":"idle","phase":"idle","taskId":"search_1781631522855","taskDesc":"双眼皮","context":{}}
+{"ts":1781632008360,"time":"2026/6/17 01:46:48","action":"error","from":"idle","to":"idle","phase":"idle","taskId":"search_1781631522855","taskDesc":"双眼皮","error":"Object has been destroyed","category":"unknown"}
+{"ts":1781632008361,"time":"2026/6/17 01:46:48","action":"transition","from":"idle","to":"recovering","phase":"idle","taskId":"search_1781631522855","taskDesc":"双眼皮","error":"Object has been destroyed","context":{"category":"unknown"}}
+{"ts":1781632008362,"time":"2026/6/17 01:46:48","action":"transition","from":"recovering","to":"idle","phase":"idle","taskId":"search_1781631522855","taskDesc":"双眼皮","context":{}}
+{"ts":1781632308393,"time":"2026/6/17 01:51:48","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781632308393","taskDesc":"??"}
+{"ts":1781632309184,"time":"2026/6/17 01:51:49","action":"recovery_from_crash","from":"searching","to":"idle","phase":"starting","taskId":"search_1781632308393","taskDesc":"??","reason":"异常退出"}
+{"ts":1781632550011,"time":"2026/6/17 01:55:50","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781632308393","taskDesc":"??","reason":"异常退出"}
+{"ts":1781632572127,"time":"2026/6/17 01:56:12","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781632572127","taskDesc":"??"}
+{"ts":1781632669507,"time":"2026/6/17 01:57:49","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781632572127","taskDesc":"??"}
+{"ts":1781632754090,"time":"2026/6/17 01:59:14","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781632754090","taskDesc":"??"}
+{"ts":1781632966314,"time":"2026/6/17 02:02:46","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781632754090","taskDesc":"??","reason":"异常退出"}
+{"ts":1781632988736,"time":"2026/6/17 02:03:08","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781632988736","taskDesc":"??"}
+{"ts":1781633345229,"time":"2026/6/17 02:09:05","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781632988736","taskDesc":"??","reason":"异常退出"}
+{"ts":1781633676796,"time":"2026/6/17 02:14:36","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781632988736","taskDesc":"??","reason":"异常退出"}
+{"ts":1781634253315,"time":"2026/6/17 02:24:13","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781634253315","taskDesc":"???"}
+{"ts":1781634271242,"time":"2026/6/17 02:24:31","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781634253315","taskDesc":"???"}
+{"ts":1781634305300,"time":"2026/6/17 02:25:05","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781634305300","taskDesc":"双眼皮"}
+{"ts":1781634356008,"time":"2026/6/17 02:25:56","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781634305300","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781634445915,"time":"2026/6/17 02:27:25","action":"recovery_from_crash","from":"searching","to":"idle","phase":"video_done","taskId":"search_1781634305300","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781634623539,"time":"2026/6/17 02:30:23","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781634305300","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781634650572,"time":"2026/6/17 02:30:50","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781634305300","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781634684479,"time":"2026/6/17 02:31:24","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781634684479","taskDesc":"双眼皮"}
+{"ts":1781634952371,"time":"2026/6/17 02:35:52","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781634684479","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781635820851,"time":"2026/6/17 02:50:20","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781635820851","taskDesc":"shuangyanpi"}
+{"ts":1781636081529,"time":"2026/6/17 02:54:41","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781635820851","taskDesc":"shuangyanpi","reason":"异常退出"}
+{"ts":1781636110280,"time":"2026/6/17 02:55:10","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781636110280","taskDesc":"双眼皮"}
+{"ts":1781636414760,"time":"2026/6/17 03:00:14","action":"recovery_from_crash","from":"searching","to":"idle","phase":"processing_video","taskId":"search_1781636110280","taskDesc":"双眼皮","reason":"异常退出"}
+{"ts":1781636495264,"time":"2026/6/17 03:01:35","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781636495263","taskDesc":"双眼皮"}
+{"ts":1781636513191,"time":"2026/6/17 03:01:53","action":"transition","from":"searching","to":"idle","phase":"completed","taskId":"search_1781636495263","taskDesc":"双眼皮"}
+{"ts":1781637161373,"time":"2026/6/17 03:12:41","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781637161373","taskDesc":"#减肥,#瘦脸针,#双眼皮,#抽脂"}
+{"ts":1781637214676,"time":"2026/6/17 03:13:34","action":"recovery_from_crash","from":"searching","to":"idle","phase":"starting","taskId":"search_1781637161373","taskDesc":"#减肥,#瘦脸针,#双眼皮,#抽脂","reason":"异常退出"}
+{"ts":1781637457102,"time":"2026/6/17 03:17:37","action":"transition","from":"idle","to":"searching","phase":"starting","taskId":"search_1781637457102","taskDesc":"双眼皮"}
+{"ts":1781637492167,"time":"2026/6/17 03:18:12","action":"recovery_from_crash","from":"searching","to":"idle","phase":"starting","taskId":"search_1781637457102","taskDesc":"双眼皮","reason":"异常退出"}

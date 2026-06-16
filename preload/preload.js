@@ -9,6 +9,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 const SAFE_EVENTS = [
   'request-data', 'search-log', 'search-result', 'search-progress',
   'monitor-log', 'monitor-result', 'monitor-progress',
+  'recommend-log', 'recommend-result', 'recommend-progress',
   'stats-updated', 'config-updated', 'wechat-sent', 'resize-panel',
   'error-notify', 'database-error', 'scheduler-log'
 ];
@@ -16,11 +17,13 @@ const SAFE_EVENTS = [
 const SAFE_INVOKES = [
   'start-search', 'stop-search', 'pause-search',
   'start-monitor', 'stop-monitor',
+  'start-recommend', 'stop-recommend', 'pause-recommend',
   'get-config', 'save-config',
   'add-blogger', 'update-blogger', 'del-blogger',
   'export-results', 'send-test-email', 'send-test-wechat',
   'get-stats', 'get-matches-page', 'clear-matches',
-  'show-douyin-view', 'hide-douyin-view'
+  'show-douyin-view', 'hide-douyin-view',
+  'switch-platform'
 ];
 
 const api = {};

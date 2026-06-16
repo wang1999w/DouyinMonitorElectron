@@ -22,7 +22,7 @@
   },
   "build": {
     "appId": "com.douyinmonitor.app",
-    "productName": "抖音监控系统",
+    "productName": "CW自媒体监控系统",
     "win": {
       "target": "nsis",
       "icon": "assets/icon.png"

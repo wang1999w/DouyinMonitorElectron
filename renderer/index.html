@@ -3,16 +3,23 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>抖音监控系统 v2.0</title>
+  <title>CW自媒体监控系统</title>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="xhs-styles.css">
 </head>
 <body>
   <!-- 顶部标题栏 -->
   <header id="app-header">
-    <h1>抖音博主监控与意向采集系统 v2.0</h1>
-    <div id="header-stats">
-      <span id="stat-today" class="stat-badge">今日匹配: <b>0</b></span>
-      <span id="stat-total" class="stat-badge">总匹配: <b>0</b></span>
+    <h1>CW自媒体监控系统</h1>
+    <div style="display:flex;align-items:center;gap:16px;">
+      <div class="platform-switcher">
+        <button class="platform-btn active" id="btn-platform-douyin" onclick="switchPlatform('douyin')">抖音</button>
+        <button class="platform-btn" id="btn-platform-xhs" onclick="switchPlatform('xhs')">小红书</button>
+      </div>
+      <div id="header-stats">
+        <span id="stat-today" class="stat-badge">今日匹配: <b>0</b></span>
+        <span id="stat-total" class="stat-badge">总匹配: <b>0</b></span>
+      </div>
     </div>
   </header>
 
@@ -32,6 +39,7 @@
         <button class="tab-btn active" data-tab="network">Network</button>
         <button class="tab-btn" data-tab="search">搜索</button>
         <button class="tab-btn" data-tab="monitor">监控</button>
+        <button class="tab-btn" data-tab="recommend">推荐</button>
         <button class="tab-btn" data-tab="settings">设置</button>
       </div>
 
@@ -68,7 +76,7 @@
               <label>每词采集：</label>
               <input type="number" id="search-maxv" value="10" min="1" max="100" style="width:50px">
               <label>个视频</label>
-              <label style="margin-left:8px;">最大评论：</label>
+              <label style="margin-left:8px;">评论上限：</label>
               <input type="number" id="search-maxc" value="200" min="1" style="width:50px">
             </div>
             <div class="ctrl-row">
@@ -157,6 +165,11 @@
                 <option value="3600">小时内</option>
               </select>
             </div>
+            <div class="ctrl-row">
+              <label>评论加载数：</label>
+              <input type="number" id="search-maxc-time" value="50" min="5" max="500" style="width:50px">
+              <span style="font-size:10px;color:#999;">最大加载上限，连续5条超时自动停止</span>
+            </div>
             <div style="font-size:10px;color:#999;padding:4px 8px;">自然浏览模式，不排序，持续滚动加载采集</div>
           </div>
 
@@ -243,6 +256,63 @@
           <div id="monitor-task-log" style="height:120px;overflow-y:auto;background:#1e1e1e;color:#d4d4d4;font-family:Consolas,monospace;font-size:11px;padding:6px 10px;"></div>
         </div>
         <div id="monitor-results"></div>
+      </div>
+
+      <!-- 推荐页浏览面板 -->
+      <div id="tab-recommend" class="tab-content">
+        <div id="recommend-controls">
+          <div class="ctrl-group">
+            <label>视频关键词（每行一个，匹配文案+话题）：</label>
+            <textarea id="recommend-video-kw" rows="3" placeholder="输入视频关键词...&#10;例如：装修 求推荐&#10;例如：买房 咨询"></textarea>
+          </div>
+          <div class="ctrl-row">
+            <label>评论时效：</label>
+            <input type="number" id="recommend-ch" value="60" min="1" max="1440" style="width:70px;padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+            <select id="recommend-ch-unit" style="padding:3px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+              <option value="1">分钟</option>
+              <option value="60">小时</option>
+            </select>
+            <label style="margin-left:8px;">最大评论：</label>
+            <input type="number" id="recommend-maxc" value="200" min="1" style="width:50px">
+          </div>
+          <div class="ctrl-row">
+            <label>任务结束时间：</label>
+            <input type="datetime-local" id="recommend-end-time" style="padding:4px 6px;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+            <span style="font-size:10px;color:#999;">（留空=手动停止）</span>
+          </div>
+          <div class="ctrl-row">
+            <button id="btn-recommend-start" class="btn-primary">开始浏览</button>
+            <button id="btn-recommend-pause" class="btn-secondary" disabled>暂停</button>
+            <button id="btn-recommend-stop" class="btn-danger" disabled>停止</button>
+          </div>
+          <div style="font-size:11px;color:#999;margin-bottom:6px;">自动浏览推荐页，识别文案+话题匹配关键词，命中后打开评论区采集时效评论</div>
+
+          <!-- 任务进度 -->
+          <div id="recommend-progress" style="display:none;background:#f0f7ff;padding:8px 10px;border-radius:4px;margin-top:6px;font-size:12px;">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
+              <span id="rp-video">视频: 0</span>
+              <span id="rp-status" style="color:#1a73e8;">运行中</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;">
+              <span id="rp-comment">评论: 0</span>
+              <span id="rp-match">命中: 0</span>
+            </div>
+            <div style="background:#e0e0e0;border-radius:2px;height:4px;margin-top:4px;">
+              <div id="rp-bar" style="background:#1a73e8;height:100%;border-radius:2px;width:0%;transition:width 0.3s;"></div>
+            </div>
+          </div>
+
+          <div id="recommend-status">就绪</div>
+        </div>
+        <!-- 推荐任务独立日志 -->
+        <div style="border-top:1px solid #eee;flex-shrink:0;">
+          <div style="padding:4px 10px;background:#fafafa;font-size:11px;color:#666;display:flex;justify-content:space-between;">
+            <span>推荐浏览日志</span>
+            <span id="recommend-log-count">0条</span>
+          </div>
+          <div id="recommend-task-log" style="height:120px;overflow-y:auto;background:#1e1e1e;color:#d4d4d4;font-family:Consolas,monospace;font-size:11px;padding:6px 10px;"></div>
+        </div>
+        <div id="recommend-results"></div>
       </div>
 
       <!-- 设置面板 -->
@@ -333,6 +403,7 @@
   <script src="panels/network.js"></script>
   <script src="panels/search.js"></script>
   <script src="panels/monitor.js"></script>
+  <script src="panels/recommend.js"></script>
   <script src="panels/settings.js"></script>
   <script src="app.js"></script>
 </body>

@@ -1,0 +1,66 @@
+/* 小红书特有样式 */
+
+.xhs-header {
+  background: #e74c3c !important;
+}
+
+.btn-xhs {
+  background: #e74c3c !important;
+}
+
+.btn-xhs:hover {
+  background: #c0392b !important;
+}
+
+#xhs-placeholder {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #999;
+  font-size: 14px;
+}
+
+/* 平台切换按钮 */
+.platform-switcher {
+  display: flex;
+  gap: 0;
+  margin-right: 16px;
+}
+
+.platform-btn {
+  padding: 6px 16px;
+  border: 1px solid rgba(255,255,255,0.3);
+  background: rgba(255,255,255,0.1);
+  color: rgba(255,255,255,0.7);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.platform-btn:first-child {
+  border-radius: 4px 0 0 4px;
+}
+
+.platform-btn:last-child {
+  border-radius: 0 4px 4px 0;
+  border-left: none;
+}
+
+.platform-btn:hover {
+  background: rgba(255,255,255,0.2);
+  color: #fff;
+}
+
+.platform-btn.active {
+  background: rgba(255,255,255,0.3);
+  color: #fff;
+  font-weight: 600;
+}
+
+.platform-btn.active-xhs {
+  background: #e74c3c !important;
+  border-color: #e74c3c !important;
+  color: #fff !important;
+}
