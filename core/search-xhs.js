@@ -405,18 +405,24 @@ async function doFilter(view, params) {
 
   // 2. 悬停打开面板（用CDP的Input.dispatchMouseEvent模拟真实鼠标移动）
   // 小红书是hover触发，必须用真实鼠标事件
+  // 先移动到筛选按钮附近（避免Bezier曲线绕过按钮）
+  await human.mouseMove(wc, filterBtn.x - 30, filterBtn.y);
+  await dom.sleep(200, 400);
+  // 再缓慢移动到按钮中心
   await human.mouseMove(wc, filterBtn.x, filterBtn.y);
-  await dom.sleep(800, 1200); // 悬停等待面板展开
+  await dom.sleep(1000, 1500); // 悬停等待面板展开
 
   // 验证面板是否出现
   let panel = await _getFilterPanel(wc);
   if (!panel) {
     log('  ⚠ 筛选面板未出现，重试悬停...');
-    // 再悬停一次
-    await human.mouseMove(wc, filterBtn.x - 5, filterBtn.y - 5);
+    // 再悬停一次：先移开再移回
+    await human.mouseMove(wc, filterBtn.x - 50, filterBtn.y - 30);
     await dom.sleep(300, 500);
+    await human.mouseMove(wc, filterBtn.x - 10, filterBtn.y);
+    await dom.sleep(200, 400);
     await human.mouseMove(wc, filterBtn.x, filterBtn.y);
-    await dom.sleep(800, 1200);
+    await dom.sleep(1000, 1500);
     panel = await _getFilterPanel(wc);
     if (!panel) {
       log('  ❌ 筛选面板未出现');
