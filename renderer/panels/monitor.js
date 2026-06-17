@@ -16,12 +16,23 @@
     document.getElementById('btn-monitor-del').addEventListener('click', delBlogger);
     document.getElementById('btn-monitor-start').addEventListener('click', startMonitor);
     document.getElementById('btn-monitor-stop').addEventListener('click', stopMonitor);
+    const pauseBtn = document.getElementById('btn-monitor-pause');
+    if (pauseBtn) pauseBtn.addEventListener('click', pauseMonitor);
 
     window.electronAPI.onMonitorLog((msg) => {
       updateMonitorStatus(msg);
       appendTaskLog('monitor', msg);
     });
     window.electronAPI.onMonitorResult((result) => addMonitorResult(result));
+    // ★ 监听任务完成事件（权威状态更新）— 无论正常/异常/停止都会触发
+    if (window.electronAPI.onMonitorCompleted) {
+      window.electronAPI.onMonitorCompleted((info) => {
+        setMonitorRunning(false);
+        appendTaskLog('monitor', (info && info.success === false && info.reason === 'error')
+          ? `❌ 监控任务失败: ${info.message || '未知错误'}`
+          : (info && info.reason === 'user_stopped' ? '🛑 监控任务已停止' : '✅ 监控任务已完成'));
+      });
+    }
     // 事件驱动进度
     document.addEventListener('monitor-progress', (e) => applyMonitorProgress(e.detail));
 
@@ -131,8 +142,8 @@
             <input type="text" id="bm-nickname" placeholder="如：张三" style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;box-sizing:border-box;">
           </div>
           <div style="flex:2;">
-            <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">sec_uid <span style="color:#999;">（主页链接 user/ 后）</span></label>
-            <input type="text" id="bm-secuid" placeholder="MS4wLjABAAAA..." style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;box-sizing:border-box;">
+            <label style="display:block;font-size:12px;color:#666;margin-bottom:3px;">博主主页地址 <span style="color:#999;">（支持 sec_uid / 完整主页URL / 短链分享URL）</span></label>
+            <input type="text" id="bm-secuid" placeholder="MS4wLjABAAAA... 或 https://www.douyin.com/user/... 或 https://v.douyin.com/..." style="width:100%;padding:6px 8px;border:1px solid #ddd;border-radius:4px;font-size:12px;box-sizing:border-box;">
           </div>
         </div>
 
@@ -201,14 +212,35 @@
       const commentHours = (parseInt(document.getElementById('bm-comment-hours').value) || 60) * (parseInt(document.getElementById('bm-comment-unit').value) || 1);
       const status = document.getElementById('bm-status').checked ? 1 : 0;
 
-      if (!secUid) { window.Toast && window.Toast.warn('请填写博主 sec_uid'); return; }
+      if (!secUid) { window.Toast && window.Toast.warn('请填写博主主页地址或 sec_uid'); return; }
+      // ★ 校验：sec_uid 字段允许三种格式
+      //   1. 纯 sec_uid（长度>30，无斜杠/冒号）
+      //   2. 完整主页URL（含 douyin.com/user/）
+      //   3. 短链分享URL（含 v.douyin.com 或其他 douyin 域名）
+      if (!isValidBloggerIdentifier(secUid)) {
+        window.Toast && window.Toast.warn('博主地址格式不正确\n支持：纯 sec_uid / 完整主页URL / 短链分享URL');
+        return;
+      }
       if (!timesStr) { window.Toast && window.Toast.warn('请至少填写一个触发时间点'); return; }
+      // ★ 校验：触发时间格式（HH:MM）
+      const times = timesStr.split('\n').map(s => s.trim()).filter(Boolean);
+      for (const t of times) {
+        if (!/^\d{1,2}:\d{2}$/.test(t)) {
+          window.Toast && window.Toast.warn(`触发时间格式错误: "${t}"\n请使用 HH:MM 格式，如 09:00`);
+          return;
+        }
+      }
+      // ★ 校验：评论时效范围（1-1440小时）
+      if (commentHours < 1 || commentHours > 1440) {
+        window.Toast && window.Toast.warn('评论时效范围: 1-1440小时');
+        return;
+      }
 
       let result;
       if (editMode) {
         const updates = {
           nickname: nickname || '未命名',
-          trigger_times: timesStr.split('\n').map(s => s.trim()).filter(Boolean),
+          trigger_times: times,
           intent_keywords: intentStr ? intentStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
           garbage_keywords: garbageStr ? garbageStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
           comment_hours: commentHours,
@@ -220,7 +252,7 @@
         const blogger = {
           sec_uid: secUid,
           nickname: nickname || '未命名',
-          trigger_times: timesStr.split('\n').map(s => s.trim()).filter(Boolean),
+          trigger_times: times,
           intent_keywords: intentStr ? intentStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
           garbage_keywords: garbageStr ? garbageStr.split('\n').map(s => s.trim()).filter(Boolean) : [],
           comment_hours: commentHours,
@@ -296,22 +328,79 @@
       window.Toast && window.Toast.warn('请先添加监控博主');
       return;
     }
+    // ★ 校验：至少有一个启用的博主
+    const enabledBloggers = cfg.monitor_bloggers.filter(b => b.status === 1);
+    if (enabledBloggers.length === 0) {
+      window.Toast && window.Toast.warn('没有启用的博主，请先在编辑中启用');
+      return;
+    }
+    // ★ 校验：启用的博主至少有一个配置了触发时间
+    const withTriggers = enabledBloggers.filter(b => (b.trigger_times || []).length > 0);
+    if (withTriggers.length === 0) {
+      window.Toast && window.Toast.warn('启用的博主未配置触发时间\n请在编辑中设置触发时间点（如 09:00）');
+      return;
+    }
     setMonitorRunning(true);
     await window.electronAPI.startMonitor();
+    // ★ 提示待命模式
+    const allTimes = withTriggers.map(b => (b.trigger_times || []).join(', ')).join(' / ');
+    window.Toast && window.Toast.info(`监控已进入待命模式\n将在预设时间自动触发: ${allTimes}`);
   }
 
   async function stopMonitor() {
-    await window.electronAPI.stopMonitor();
+    // ★ 超时保护：避免后端卡住导致按钮永远 disabled
+    try {
+      await Promise.race([
+        window.electronAPI.stopMonitor(),
+        new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 3000))
+      ]);
+    } catch (e) {
+      console.error('stopMonitor异常:', e.message);
+    }
     setMonitorRunning(false);
+  }
+
+  async function pauseMonitor() {
+    try {
+      await Promise.race([
+        window.electronAPI.pauseMonitor(),
+        new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), 3000))
+      ]);
+    } catch (e) {
+      console.error('pauseMonitor异常:', e.message);
+    }
+    // 暂停状态由日志回调 updateMonitorStatus 更新按钮文字
+    // 这里只确保按钮可用性正确
+    const pauseBtn = document.getElementById('btn-monitor-pause');
+    if (pauseBtn) {
+      // 切换文字（实际状态以后端 isPaused 为准，这里乐观更新）
+      pauseBtn.textContent = pauseBtn.textContent === '暂停' ? '恢复' : '暂停';
+    }
   }
 
   function setMonitorRunning(running) {
     document.getElementById('btn-monitor-start').disabled = running;
-    document.getElementById('btn-monitor-stop').disabled = !running;
+    const pauseBtn = document.getElementById('btn-monitor-pause');
+    const stopBtn = document.getElementById('btn-monitor-stop');
+    if (pauseBtn) {
+      pauseBtn.disabled = !running;
+      // 启动/停止时重置文字
+      if (!running) pauseBtn.textContent = '暂停';
+    }
+    if (stopBtn) stopBtn.disabled = !running;
   }
 
   function updateMonitorStatus(msg) {
-    if (msg.includes('已停止')) setMonitorRunning(false);
+    // ★ 修复：只对任务级状态消息禁用按钮，避免日志中的"完成"误触发
+    if (msg.includes('监控任务已停止') || msg.includes('监控任务失败')) {
+      setMonitorRunning(false);
+    }
+    // 暂停/恢复文字切换
+    const pauseBtn = document.getElementById('btn-monitor-pause');
+    if (pauseBtn) {
+      if (msg.includes('监控已暂停')) pauseBtn.textContent = '恢复';
+      else if (msg.includes('监控已恢复')) pauseBtn.textContent = '暂停';
+    }
   }
 
   function addMonitorResult(result) {
@@ -336,6 +425,26 @@
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+  }
+
+  /**
+   * 校验博主标识符格式
+   * 支持三种格式：
+   *   1. 纯 sec_uid（长度>30，无斜杠/冒号）
+   *   2. 完整主页URL（含 douyin.com/user/）
+   *   3. 短链分享URL（含 v.douyin.com 或其他 douyin 域名，允许带杂质文本）
+   */
+  function isValidBloggerIdentifier(raw) {
+    if (!raw || typeof raw !== 'string') return false;
+    const s = raw.trim();
+    if (!s) return false;
+    // 规则1: 纯 sec_uid
+    if (!s.includes('/') && !s.includes(':') && s.length > 30) return true;
+    // 规则2: 完整主页URL
+    if (/douyin\.com\/user\//.test(s)) return true;
+    // 规则3: 短链分享URL（含杂质文本也允许）
+    if (/https?:\/\/[^\s]*douyin\.com\/[A-Za-z0-9]+\/?/.test(s)) return true;
+    return false;
   }
 
   /** 写入监控任务独立日志 */

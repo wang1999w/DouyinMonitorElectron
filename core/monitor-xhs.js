@@ -77,8 +77,11 @@ async function executeSingleBlogger(blogger, cfg, getViewFn, getCdpFn, onProgres
 
   const intentKw = blogger.intent_keywords || [];
   const garbageKw = blogger.garbage_keywords || [];
-  const commentMins = blogger.comment_hours || 60;
-  const cutoffTs = Math.floor(Date.now() / 1000) - commentMins * 60;
+  // 评论时效（小时）：默认1小时=60分钟，与搜索模块一致
+  const commentHours = blogger.comment_hours || 1;
+  const cutoffTs = Math.floor(Date.now() / 1000) - commentHours * 3600;
+  const maxComments = blogger.max_comments || 200;
+  log(`  评论时效: ${commentHours}小时 (cutoff=${new Date(cutoffTs * 1000).toLocaleString('zh-CN')})`);
 
   try {
     // 1. 跳转到博主主页
@@ -110,8 +113,9 @@ async function executeSingleBlogger(blogger, cfg, getViewFn, getCdpFn, onProgres
 
       const noteInfo = {
         note_id: note.noteId,
-        title: '',
+        title: note.title || '',
         author: nickname,
+        author_url: `https://www.xiaohongshu.com/user/profile/${userId}`,
         note_url: `https://www.xiaohongshu.com/explore/${note.noteId}`
       };
 
@@ -132,6 +136,8 @@ async function executeSingleBlogger(blogger, cfg, getViewFn, getCdpFn, onProgres
           if (logCallback) logCallback(`    [命中] ${result.nickname}: ${(result.text || '').slice(0, 30)}`);
           if (resultCallback) resultCallback(result);
         },
+        onLog: log,
+        maxComments,
         cutoffTs
       });
 

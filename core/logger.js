@@ -24,6 +24,38 @@ let currentDate = null;
 const FLUSH_INTERVAL_MS = 1000;
 const FLUSH_THRESHOLD = 200;
 
+// IPC 广播器（主进程创建窗口后注册）
+let ipcSender = null;
+let pendingIpcMessages = [];        // sender未就绪时的缓冲队列
+const PENDING_MAX = 100;             // 最多缓冲100条（防内存泄漏）
+let senderReady = false;
+
+function setIpcSender(sender) {
+  ipcSender = sender;
+  senderReady = true;
+  // 补发缓冲中的历史消息
+  if (pendingIpcMessages.length > 0) {
+    const msgs = pendingIpcMessages;
+    pendingIpcMessages = [];
+    for (const m of msgs) {
+      try { sender(m); } catch (e) {}
+    }
+  }
+}
+
+function broadcastIpc(level, name, msg) {
+  const payload = { level, name, message: msg, time: Date.now() };
+  if (senderReady && ipcSender) {
+    try { ipcSender(payload); } catch (e) {}
+  } else {
+    // sender尚未就绪，先缓冲（最多保留最近100条）
+    pendingIpcMessages.push(payload);
+    if (pendingIpcMessages.length > PENDING_MAX) {
+      pendingIpcMessages.shift();
+    }
+  }
+}
+
 function setLevel(level) {
   currentLevel = LEVELS[(level || 'INFO').toUpperCase()] || LEVELS.INFO;
 }
@@ -46,6 +78,9 @@ function log(level, name, msg) {
 
   if (level === 'ERROR') console.error(line);
   else console.log(line);
+
+  // 广播到前端运行日志面板（system-log 通道）
+  broadcastIpc(level, name, safeMsg);
 
   // 内存队列
   pendingLines.push(line);
@@ -116,4 +151,4 @@ function flush() {
   }
 }
 
-module.exports = { getLogger, setLevel, flush };
+module.exports = { getLogger, setLevel, setIpcSender, flush };

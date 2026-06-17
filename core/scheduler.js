@@ -133,6 +133,7 @@ function checkSearchSchedule(cfg) {
       filterDuration: cfg.search_filter_duration || '0',
       maxVideos: cfg.search_max_videos || 30,
       commentHours: cfg.search_comment_hours || 60,
+      commentSort: cfg.search_comment_sort || '',  // 评论区排序自由预设：newest/hottest/default
       taskDuration: cfg.search_task_duration || 30 * 60 * 1000,
       triggeredBySchedule: true
     };

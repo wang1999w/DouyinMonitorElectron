@@ -23,10 +23,16 @@ const logger = getLogger('DomUtils');
 
 // ========== 通用工具 ==========
 
-async function execJS(wc, script) {
+async function execJS(wc, script, timeoutMs = 15000) {
   try {
-    return await wc.executeJavaScript(script);
+    return await Promise.race([
+      wc.executeJavaScript(script),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('js_timeout')), timeoutMs))
+    ]);
   } catch (e) {
+    if (e && e.message === 'js_timeout') {
+      // 超时静默处理，返回 null 避免整个流程中断
+    }
     return null;
   }
 }
@@ -293,56 +299,128 @@ async function getVideoCommentCountFromList(view, aid) {
 }
 
 /**
- * 检查评论区是否打开（laizan 方式：#videoSideCard + clientWidth）
+ * 检查评论区是否打开（多选择器检测 - 比单一 #videoSideCard 更可靠）
+ * 检查逻辑：
+ *   1. #videoSideCard 可见（经典布局）
+ *   2. .comment-input-inner-container 存在（评论输入框）
+ *   3. [data-e2e="comment-list"] 存在（评论列表）
+ *   4. 页面URL包含 /video/ 且右侧有评论区域元素
  */
 async function isCommentOpen(view) {
+  const result = await execJS(view.webContents, `(function(){
+    var hit = 0;
+    var el1 = document.querySelector('#videoSideCard');
+    if (el1 && el1.clientWidth > 0) hit++;
+    var el2 = document.querySelector('.comment-input-inner-container');
+    if (el2 && el2.getBoundingClientRect().width > 0) hit++;
+    var el3 = document.querySelector('[data-e2e="comment-list"]');
+    if (el3 && el3.getBoundingClientRect().height > 0) hit++;
+    var el4 = document.querySelector('[class*="commentPanel"], [class*="comment-panel"], [class*="CommentPanel"]');
+    if (el4 && el4.getBoundingClientRect().width > 0) hit++;
+    return { hit: hit, hasVideoSideCard: !!(el1 && el1.clientWidth > 0), hasInput: !!(el2 && el2.getBoundingClientRect().width > 0), hasList: !!(el3 && el3.getBoundingClientRect().height > 0) };
+  })()`) ?? { hit: 0 };
+  return result.hit >= 2;
+}
+
+/**
+ * 点击评论图标打开评论区（比键盘快捷键更可靠）
+ * 优先点击 [data-e2e="feed-comment-icon"]，兜底点击评论相关元素
+ * @returns {boolean} 是否成功点击
+ */
+async function openCommentPanel(view) {
   return await execJS(view.webContents, `(function(){
-    const el = document.querySelector('#videoSideCard');
-    if (!el) return false;
-    return el.clientWidth > 0;
-  })()`) ?? false;
+    // 1. 优先点击 feed-comment-icon
+    var selectors = [
+      '[data-e2e="feed-comment-icon"]',
+      '[data-e2e="comment-icon"]',
+      '[class*="comment-icon"] svg',
+      '[class*="CommentIcon"]',
+      'div[class*="feed"] [class*="comment"] button'
+    ];
+    for (var i = 0; i < selectors.length; i++) {
+      try {
+        var el = document.querySelector(selectors[i]);
+        if (el) {
+          var r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0 && r.left >= 0 && r.top >= 0) {
+            el.click();
+            return { ok: true, selector: selectors[i], x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2) };
+          }
+        }
+      } catch(e) {}
+    }
+    return { ok: false };
+  })()`) ?? { ok: false };
 }
 
 /**
  * 获取评论数
- * 策略1: data-e2e="comment-icon" 旁边的数字
- * 策略2: "抢首评" 文本
+ * 策略1: 在当前视频区域内的评论图标旁找数字（优先级最高）
+ * 策略2: 在评论图标附近找"抢首评"文字（仅限图标区域，不搜索整个页面）
  * 策略3: 评论列表中的元素数量
+ * 
+ * ⚠️ 关键修复：不使用 document.body.innerText 全局搜索，
+ *    避免被搜索结果页其他视频卡片的"抢首评"干扰
  */
 async function getCommentCount(view) {
   return await execJS(view.webContents, `(function(){
-    const body = document.body.innerText;
-    // 抢首评 = 无评论
-    if (body.includes('抢首评')) return 0;
-    // 找评论按钮旁的数字（支持多种 data-e2e 名称）
-    const selectors = [
+    // 优先定位到当前视频区域（feed-active-video）
+    const activeVideo = document.querySelector('[data-e2e="feed-active-video"]');
+    // ★ 关键修复：如果 feed-active-video 不存在，直接返回-1（未知）
+    // 不能回退到 document.body，否则会在搜索结果列表中找到错误的数字
+    if (!activeVideo) return -1;
+    const rootScope = activeVideo;
+
+    // ===== 策略1: 找评论按钮旁的数字（优先级最高）=====
+    const iconSelectors = [
       '[data-e2e="feed-comment-icon"]',
       '[data-e2e="comment-icon"]',
       '[class*="comment" i][class*="icon" i]'
     ];
-    for (const sel of selectors) {
-      const icon = document.querySelector(sel);
+    for (const sel of iconSelectors) {
+      const icon = rootScope.querySelector(sel);
       if (icon) {
-        // 数字可能在 icon 自身或父元素
-        const targets = [icon, icon.parentElement, icon.closest('[class*="digg"]') || icon.parentElement];
+        // ★ 只检查 icon 自身和直接父元素，不检查更上层容器
+        // 因为上层容器可能包含点赞数、收藏数等多个数字
+        const targets = [
+          icon,
+          icon.parentElement
+        ].filter(t => t !== null);
         for (const t of targets) {
           if (!t) continue;
           const text = (t.innerText || '').trim();
-          // 支持 "1.5万" "3.2万" 格式
+          // 支持 "1.5万" "3.2万" "12.3万" 格式
           const wanMatch = text.match(/([\\d.]+)万/);
           if (wanMatch) return Math.round(parseFloat(wanMatch[1]) * 10000);
-          const m = text.match(/(\\d+)/);
-          if (m) return parseInt(m[1]);
+          // 支持普通数字（只匹配纯数字文本，避免匹配到包含多个数字的容器）
+          if (text.match(/^\\d+$/)) return parseInt(text);
         }
+        // 如果图标存在但没找到纯数字，检查是否是"抢首评"
+        const iconText = (icon.parentElement ? icon.parentElement.innerText : icon.innerText || '').trim();
+        if (iconText.includes('抢首评')) return 0;
       }
     }
-    // 找包含"评"字的数字
-    for (const el of document.querySelectorAll('*')) {
-      const t = (el.innerText || '').trim();
-      if (t.match(/^\\d+$/) && el.nextElementSibling && (el.nextElementSibling.innerText||'').includes('评'))
-        return parseInt(t);
+
+    // ===== 策略2: 在当前视频区域内精确查找"抢首评"=====
+    const firstCommentEl = activeVideo.querySelector('[class*="comment" i]');
+    if (firstCommentEl && (firstCommentEl.innerText || '').includes('抢首评')) {
+      return 0;
     }
-    return -1;
+
+    // ===== 策略3: 找包含"评"字的数字（仅在当前视频区域内）=====
+    const limitElements = rootScope.querySelectorAll('span, div, p');
+    let checked = 0;
+    for (const el of limitElements) {
+      if (checked > 50) break;
+      checked++;
+      const t = (el.innerText || '').trim();
+      if (t.length > 20) continue;
+      if (t.match(/^\\d+$/) && el.nextElementSibling && (el.nextElementSibling.innerText||'').includes('评')) {
+        return parseInt(t);
+      }
+    }
+
+    return -1; // 未检测到（未知）
   })()`) ?? -1;
 }
 
@@ -524,20 +602,23 @@ async function readDomComments(view) {
 
 /**
  * 滚动评论区加载更多
+ * ⚠️ 关键安全规则：
+ *  1. 只滚动明确识别到的评论区容器，找不到就不滚动
+ *  2. 不做"找右侧可滚动容器"的兜底，避免误滚到视频区域
+ *  3. 同时使用 wheelEvent + scrollBy，兼容虚拟滚动组件
  */
 async function scrollCommentPanel(view, times = 3, deltaY = 400) {
   const wc = view.webContents;
   for (let i = 0; i < times; i++) {
-    // 使用wheel事件模拟真实鼠标滚动（虚拟滚动组件监听wheel事件而非scroll）
-    await execJS(wc, `(function(){
-      // 找评论区的真实滚动容器
+    const scrolled = await execJS(wc, `(function(){
+      // 1. 优先找评论列表（最可靠）
       const list = document.querySelector('[data-e2e="comment-list"]');
       let scrollTarget = null;
 
       if (list) {
         // 向上查找overflow: scroll/auto的父元素
         let p = list;
-        while (p) {
+        while (p && p !== document.body) {
           const s = getComputedStyle(p);
           if (s.overflowY === 'auto' || s.overflowY === 'scroll') {
             scrollTarget = p;
@@ -549,39 +630,37 @@ async function scrollCommentPanel(view, times = 3, deltaY = 400) {
         if (!scrollTarget) scrollTarget = list;
       }
 
+      // 2. 降级：找明确的评论区容器（不使用模糊的"可滚动元素"搜索）
       if (!scrollTarget) {
-        // 降级：尝试常见选择器
-        scrollTarget = document.querySelector('.comment-mainContent') ||
-                       document.querySelector('#videoSideCard [class*="comment"]') ||
-                       document.querySelector('[class*="commentList"]') ||
-                       document.querySelector('[class*="comment-list"]');
+        scrollTarget = document.querySelector('#videoSideCard') ||
+                       document.querySelector('.comment-mainContent');
       }
 
-      if (!scrollTarget) {
-        // 最终降级：找右侧的可滚动容器
-        const allScrollable = Array.from(document.querySelectorAll('*')).filter(el => {
-          const s = getComputedStyle(el);
-          return (s.overflowY === 'auto' || s.overflowY === 'scroll') && el.scrollHeight > el.clientHeight + 50;
-        });
-        scrollTarget = allScrollable.sort((a, b) => {
-          return b.getBoundingClientRect().left - a.getBoundingClientRect().left;
-        })[0];
+      if (!scrollTarget) return false;
+
+      // 验证：滚动目标必须在页面右侧（避免误操作左侧视频区）
+      const rect = scrollTarget.getBoundingClientRect();
+      const vpWidth = window.innerWidth || 800;
+      if (rect.left < vpWidth * 0.3) {
+        // 目标在页面左侧/中部，可能不是评论区，拒绝滚动
+        return false;
       }
 
-      if (scrollTarget) {
-        // 方式1: dispatchEvent wheel（虚拟滚动组件监听这个）
-        const wheelEvent = new WheelEvent('wheel', {
-          deltaY: ${deltaY},
-          deltaMode: 0,
-          bubbles: true,
-          cancelable: true
-        });
-        scrollTarget.dispatchEvent(wheelEvent);
+      // 执行滚动：方式1 - wheel事件（虚拟滚动组件监听这个）
+      const wheelEvent = new WheelEvent('wheel', {
+        deltaY: ${deltaY},
+        deltaMode: 0,
+        bubbles: true,
+        cancelable: true
+      });
+      scrollTarget.dispatchEvent(wheelEvent);
 
-        // 方式2: 同时也执行scrollBy（双保险）
-        scrollTarget.scrollBy({ top: ${deltaY}, behavior: 'smooth' });
-      }
-    })()`);
+      // 执行滚动：方式2 - scrollBy（传统DOM滚动）
+      scrollTarget.scrollBy({ top: ${deltaY}, behavior: 'smooth' });
+      return true;
+    })()`) ?? false;
+
+    if (!scrolled) break; // 找不到合法滚动目标，停止滚动
     await sleep(800, 1500);
   }
 }
@@ -694,6 +773,271 @@ async function scanVideoLinks(view) {
   })()`) || []);
 }
 
+// ===== 新增：页面状态检测与精确数据提取 =====
+
+/**
+ * 检测当前页面类型
+ * @returns {Promise<string>} 'search_result' | 'video_detail' | 'home' | 'unknown'
+ */
+async function getPageState(view) {
+  const wc = view.webContents;
+  try {
+    const result = await execJS(wc, `(function(){
+      const url = location.href;
+      const hasFeedActiveVideo = !!document.querySelector('[data-e2e="feed-active-video"]');
+      const hasSearchInput = !!document.querySelector('[data-e2e="searchbar-input"]') || !!document.querySelector('input[placeholder*="搜索"]');
+      const hasSearchTabs = !!document.querySelector('[role="tablist"]') || document.querySelectorAll('[data-e2e^="search"]').length > 1;
+      const isVideoUrl = url.includes('/video/');
+      const isSearchUrl = url.includes('/search/') || url.includes('keyword=');
+      
+      if (isVideoUrl || hasFeedActiveVideo) return 'video_detail';
+      if (isSearchUrl || (hasSearchInput && hasSearchTabs)) return 'search_result';
+      if (url === 'https://www.douyin.com/' || url === 'https://douyin.com/') return 'home';
+      return 'unknown';
+    })()`);
+    return result || 'unknown';
+  } catch (e) {
+    return 'unknown';
+  }
+}
+
+/**
+ * 获取当前视频ID（从URL和DOM双重验证）
+ * @returns {Promise<string>} 视频ID，失败返回空字符串
+ */
+async function getCurrentVideoId(view) {
+  const wc = view.webContents;
+  try {
+    return await execJS(wc, `(function(){
+      // 方式1: URL
+      const url = location.href;
+      const urlMatch = url.match(/\\/video\\/(\\d+)/);
+      if (urlMatch) return urlMatch[1];
+      // 方式2: feed-active-video
+      const el = document.querySelector('[data-e2e="feed-active-video"]');
+      if (el) {
+        const vid = el.getAttribute('data-e2e-vid') || '';
+        if (vid) return vid;
+      }
+      // 方式3: 页面中查找视频链接
+      const links = document.querySelectorAll('a[href*="/video/"]');
+      for (const a of links) {
+        const r = a.getBoundingClientRect();
+        if (r.width > 100 && r.height > 100) {
+          const m = (a.getAttribute('href') || '').match(/\\/video\\/(\\d+)/);
+          if (m) return m[1];
+        }
+      }
+      return '';
+    })()`);
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * 验证当前页面是否是指定视频的详情页
+ * @param {object} view 
+ * @param {string} expectedAid - 预期视频ID
+ * @returns {Promise<boolean>}
+ */
+async function verifyVideoPage(view, expectedAid) {
+  if (!expectedAid || expectedAid.startsWith('card_')) return true;
+  const currentAid = await getCurrentVideoId(view);
+  return currentAid === expectedAid;
+}
+
+/**
+ * 精确获取评论项的时间文本（从多个位置尝试）
+ * 问题：之前的选择器可能匹配到视频发布时间而不是评论时间
+ */
+async function getCommentTimeTextFromItem(view, itemIndex) {
+  const wc = view.webContents;
+  try {
+    return await execJS(wc, `(function(){
+      const items = document.querySelectorAll('[data-e2e="comment-item"], [class*="comment-item"]');
+      if (!items[${itemIndex}]) return '';
+      const item = items[${itemIndex}];
+      
+      // 策略：在评论项内找时间特征文本
+      // 抖音评论时间通常在昵称下方、评论文本上方，格式为"X天前"等
+      // 同时要避免匹配到视频发布时间
+      
+      const allTextNodes = [];
+      // 遍历所有子元素文本
+      function collectText(el, depth) {
+        if (depth > 3) return;
+        for (const child of el.children) {
+          const tag = child.tagName.toLowerCase();
+          // 跳过按钮、图标等元素
+          if (child.querySelector('svg, img, button')) continue;
+          const text = (child.innerText || '').trim();
+          if (text && text.length <= 20 && !text.includes('回复')) {
+            allTextNodes.push({ text, tag, classes: child.className || '' });
+          }
+          collectText(child, depth + 1);
+        }
+      }
+      collectText(item, 0);
+      
+      // 从收集到的文本中找时间特征
+      const timePattern = /(刚刚|\\d+秒钟?前|半分钟前|\\d+分钟?前|半小时前|\\d+小时?前|昨天|前天|\\d+天前|\\d+周前|\\d+个?月前|\\d+年前|\\d{1,2}月\\d{1,2}日)/;
+      for (const t of allTextNodes) {
+        if (timePattern.test(t.text)) return t.text;
+      }
+      return '';
+    })()`);
+  } catch (e) {
+    return '';
+  }
+}
+
+/**
+ * 尝试在评论区切换到"最新"排序（如果有此选项）
+ * 抖音评论区可能有"最热/最新"等排序选项
+ * @returns {Promise<boolean>} 是否成功切换
+ */
+/**
+ * 切换评论区排序方式（支持用户自由预设）
+ * @param {object} view - Electron BrowserView
+ * @param {string} sortMode - 排序模式: 'newest'（最新/时间）| 'hottest'（最热/点赞）| 'default'（默认/不切换）
+ * @returns {boolean} 是否成功切换
+ */
+async function trySwitchCommentSort(view, sortMode) {
+  const wc = view.webContents;
+  // default 模式：不做任何切换，保持默认排序
+  if (!sortMode || sortMode === 'default') {
+    logger.info('[DOM] 评论排序: 使用默认（不切换）');
+    return false;
+  }
+  try {
+    // 根据用户选择的排序模式，确定要点击的文本标签
+    let targetTexts;
+    if (sortMode === 'newest') {
+      // 时间模式首选：按最新评论排序
+      targetTexts = ['最新', '按时间', '时间排序', '时间'];
+    } else if (sortMode === 'hottest') {
+      // 数量模式首选：按最热/最多点赞排序
+      targetTexts = ['最热', '按热度', '最热评论', '热度排序', '点赞'];
+    } else {
+      targetTexts = [sortMode];
+    }
+
+    const result = await execJS(wc, `(function(){
+      const candidates = document.querySelectorAll('button, div[role="button"], span, a');
+      const targets = ${JSON.stringify(targetTexts)};
+      for (const el of candidates) {
+        const text = (el.innerText || '').trim();
+        if (targets.includes(text)) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0 && r.width < 200 && r.height < 100) {
+            const isActive = (el.className || '').includes('active') 
+              || (el.className || '').includes('selected')
+              || el.getAttribute('aria-selected') === 'true';
+            if (!isActive) {
+              el.click();
+              return { clicked: true, text: text, alreadyActive: false };
+            } else {
+              return { clicked: true, text: text, alreadyActive: true };
+            }
+          }
+        }
+      }
+      return { clicked: false };
+    })()`);
+    if (result && result.clicked) {
+      logger.info(`[DOM] 评论排序: ${result.text} (模式: ${sortMode})${result.alreadyActive ? ' (已激活)' : ' (已切换)'}`);
+      return true;
+    }
+    logger.info(`[DOM] 评论区未发现排序切换选项（模式: ${sortMode}），使用默认排序`);
+    return false;
+  } catch (e) {
+    logger.info(`[DOM] 评论排序切换失败: ${e.message}`);
+    return false;
+  }
+}
+
+/**
+ * 旧函数（向后兼容）：等同于 trySwitchCommentSort(view, 'newest')
+ */
+async function trySwitchCommentToLatest(view) {
+  return await trySwitchCommentSort(view, 'newest');
+}
+
+/**
+ * 解析相对时间文本为时间戳
+ * 专门用于 DOM 评论时间解析
+ * @param {string} timeText - 如"3天前"、"2小时前"等
+ * @returns {number} Unix时间戳（秒）
+ */
+function parseRelativeTime(timeText) {
+  if (!timeText) return 0;
+  try {
+    const now = Math.floor(Date.now() / 1000);
+    const t = timeText.trim();
+    
+    if (t.includes('刚刚')) return now;
+    if (t.includes('半分钟前')) return now - 30;
+    if (t.includes('半小时前')) return now - 1800;
+    
+    const secMatch = t.match(/(\\d+)秒钟?前/);
+    if (secMatch) return now - parseInt(secMatch[1]);
+    
+    const minMatch = t.match(/(\\d+)分钟?前/);
+    if (minMatch) return now - parseInt(minMatch[1]) * 60;
+    
+    const hourMatch = t.match(/(\\d+)小时?前/);
+    if (hourMatch) return now - parseInt(hourMatch[1]) * 3600;
+    
+    const dayMatch = t.match(/(\\d+)天前/);
+    if (dayMatch) return now - parseInt(dayMatch[1]) * 86400;
+    
+    const weekMatch = t.match(/(\\d+)周前/);
+    if (weekMatch) return now - parseInt(weekMatch[1]) * 604800;
+    
+    const monthMatch = t.match(/(\\d+)个?月前/);
+    if (monthMatch) return now - parseInt(monthMatch[1]) * 2592000;
+    
+    const yearMatch = t.match(/(\\d+)年前/);
+    if (yearMatch) return now - parseInt(yearMatch[1]) * 31536000;
+    
+    if (t.includes('昨天')) {
+      const hmMatch = t.match(/昨天\\s*(\\d{1,2}):(\\d{2})/);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const yesterdayStart = Math.floor(today.getTime() / 1000) - 86400;
+      if (hmMatch) return yesterdayStart + parseInt(hmMatch[1]) * 3600 + parseInt(hmMatch[2]) * 60;
+      return yesterdayStart + 12 * 3600;
+    }
+    
+    if (t.includes('前天')) {
+      const hmMatch = t.match(/前天\\s*(\\d{1,2}):(\\d{2})/);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const twoDaysAgo = Math.floor(today.getTime() / 1000) - 2 * 86400;
+      if (hmMatch) return twoDaysAgo + parseInt(hmMatch[1]) * 3600 + parseInt(hmMatch[2]) * 60;
+      return twoDaysAgo + 12 * 3600;
+    }
+    
+    // 具体日期格式：如 "6月17日" 或 "6月17日 14:30"
+    const dateHourMatch = t.match(/(\\d{1,2})月(\\d{1,2})日\\s*(\\d{1,2}):(\\d{2})/);
+    if (dateHourMatch) {
+      const d = new Date(new Date().getFullYear(), parseInt(dateHourMatch[1])-1, parseInt(dateHourMatch[2]), parseInt(dateHourMatch[3]), parseInt(dateHourMatch[4]));
+      if (d.getTime() > Date.now()) d.setFullYear(d.getFullYear() - 1);
+      return Math.floor(d.getTime() / 1000);
+    }
+    
+    const dateMatch = t.match(/(\\d{1,2})月(\\d{1,2})日/);
+    if (dateMatch) {
+      const d = new Date(new Date().getFullYear(), parseInt(dateMatch[1])-1, parseInt(dateMatch[2]));
+      if (d.getTime() > Date.now()) d.setFullYear(d.getFullYear() - 1);
+      return Math.floor(d.getTime() / 1000);
+    }
+    
+    return 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
 // 抖音号缓存（避免重复fetch同一用户主页）
 const _douyinIdCache = new Map();
 const MAX_DOUYIN_ID_CACHE = 500;
@@ -788,8 +1132,11 @@ module.exports = {
   findSearchInput, findSearchButton, setSearchInputValue, verifySearchInput,
   clickVideoById, getCurrentVideoInfo, isVideoLoaded, waitForVideoLoad,
   getVideoCommentCountFromList,
-  isCommentOpen, getCommentCount, readDomComments, scrollCommentPanel,
+  isCommentOpen, openCommentPanel, getCommentCount, readDomComments, scrollCommentPanel,
   hasCaptcha,
   clickByText, scanVideoLinks,
-  fetchDouyinId
+  fetchDouyinId,
+  getPageState, getCurrentVideoId, verifyVideoPage,
+  getCommentTimeTextFromItem, trySwitchCommentToLatest, trySwitchCommentSort,
+  parseRelativeTime
 };

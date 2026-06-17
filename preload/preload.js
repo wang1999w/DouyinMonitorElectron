@@ -11,12 +11,14 @@ const SAFE_EVENTS = [
   'monitor-log', 'monitor-result', 'monitor-progress',
   'recommend-log', 'recommend-result', 'recommend-progress',
   'stats-updated', 'config-updated', 'wechat-sent', 'resize-panel',
-  'error-notify', 'database-error', 'scheduler-log'
+  'error-notify', 'database-error', 'scheduler-log',
+  'search-completed', 'recommend-completed', 'monitor-completed',
+  'task-error', 'system-log'
 ];
 
 const SAFE_INVOKES = [
   'start-search', 'stop-search', 'pause-search',
-  'start-monitor', 'stop-monitor',
+  'start-monitor', 'stop-monitor', 'pause-monitor',
   'start-recommend', 'stop-recommend', 'pause-recommend',
   'get-config', 'save-config',
   'add-blogger', 'update-blogger', 'del-blogger',

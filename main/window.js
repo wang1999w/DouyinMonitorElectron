@@ -27,6 +27,11 @@ let xhsWindow = null;
 let xhsView = null;
 let xhsCdpInterceptor = null;
 
+// 博主监控独立窗口（与其他任务窗口隔离，避免冲突）
+let monitorWindow = null;
+let monitorView = null;
+let monitorCdpInterceptor = null;
+
 const DOUYIN_URL = 'https://www.douyin.com';
 const XHS_URL = 'https://www.xiaohongshu.com';
 
@@ -467,9 +472,9 @@ function injectAntiDetection(view) {
     try {
       // 如果 CDP 拦截器已经 attach 了 debugger，直接 sendCommand
       if (!wc.debugger.isAttached()) wc.debugger.attach('1.3');
+      // 注意：Page.addScriptToEvaluateOnNewDocument 的参数必须是 "source"，不是 scriptSource
       wc.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
-        scriptSource: STEALTH_SCRIPT,
-        runImmediately: true
+        source: STEALTH_SCRIPT
       }).then(r => {
         logger.info(`Stealth CDP injected (id=${r.identifier})`);
       }).catch(e => {
@@ -496,6 +501,167 @@ function getCDPInterceptor() { return cdpInterceptor; }
 function getXHSWindow() { return xhsWindow; }
 function getXHSView() { return xhsView; }
 function getXHSCdpInterceptor() { return xhsCdpInterceptor; }
+
+// ========== 博主监控独立窗口 ==========
+
+/**
+ * 创建博主监控独立窗口
+ * 与主窗口的 douyinView 隔离，避免与搜索/推荐任务冲突
+ * 窗口大小与默认主窗口一致（1400x900）
+ */
+function createMonitorWindow() {
+  if (monitorWindow && !monitorWindow.isDestroyed()) {
+    monitorWindow.show();
+    monitorWindow.focus();
+    return monitorWindow;
+  }
+
+  monitorWindow = new BrowserWindow({
+    width: 1400,
+    height: 900,
+    minWidth: 1000,
+    minHeight: 600,
+    title: 'CW自媒体监控系统 - 博主监控',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+
+  // 监控窗口不需要加载 HTML（纯 BrowserView 容器），加载空白页
+  monitorWindow.loadURL('about:blank');
+
+  monitorWindow.on('closed', () => {
+    cleanupMonitorCDP();
+    monitorWindow = null;
+    monitorView = null;
+  });
+
+  monitorWindow.on('resize', () => {
+    updateMonitorViewBounds();
+  });
+
+  createMonitorView();
+  return monitorWindow;
+}
+
+/**
+ * 创建监控专用 BrowserView（复用抖音反检测配置）
+ */
+function createMonitorView() {
+  if (!monitorWindow) return;
+
+  monitorView = new BrowserView({
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      enableBlinkFeatures: '',
+      disableBlinkFeatures: 'AutomationControlled',
+      webSecurity: false
+    }
+  });
+
+  monitorWindow.setBrowserView(monitorView);
+  // 监控窗口 BrowserView 占满整个窗口（无右栏 UI）
+  updateMonitorViewBounds();
+
+  monitorView.webContents.loadURL(DOUYIN_URL);
+
+  monitorView.webContents.on('did-finish-load', () => {
+    onPageReadyMonitor(monitorView);
+  });
+
+  monitorView.webContents.on('did-navigate-in-page', () => {
+    injectAntiDetection(monitorView);
+    injectNavigationBlocker(monitorView);
+  });
+
+  monitorView.webContents.on('did-navigate', () => {
+    injectAntiDetection(monitorView);
+    injectNavigationBlocker(monitorView);
+  });
+
+  monitorView.webContents.on('render-process-gone', (e, details) => {
+    logger.error(`监控 BrowserView 渲染进程崩溃: ${details.reason}`);
+    cleanupMonitorCDP();
+  });
+
+  monitorView.webContents.on('destroyed', () => {
+    cleanupMonitorCDP();
+  });
+}
+
+function onPageReadyMonitor(view) {
+  ensureMonitorCDPStarted(view);
+  injectAntiDetection(view);
+  injectNavigationBlocker(view);
+}
+
+/**
+ * 启动监控专用 CDP 拦截器
+ */
+function ensureMonitorCDPStarted(view) {
+  try {
+    if (!view || !view.webContents) return;
+    if (view.webContents.isDestroyed && view.webContents.isDestroyed()) return;
+
+    if (monitorCdpInterceptor && view.webContents.debugger.isAttached()) {
+      return;
+    }
+
+    if (!monitorCdpInterceptor) {
+      monitorCdpInterceptor = new CDPInterceptor();
+    }
+    if (view.webContents.debugger.isAttached()) {
+      try { view.webContents.debugger.detach(); } catch (_) {}
+    }
+    monitorCdpInterceptor.start(view.webContents);
+    logger.info('监控窗口 CDP 拦截器已启动');
+  } catch (e) {
+    logger.error(`监控 CDP 启动失败: ${e.message}`);
+  }
+}
+
+/**
+ * 清理监控窗口 CDP 资源
+ */
+function cleanupMonitorCDP() {
+  if (!monitorCdpInterceptor) return;
+  try {
+    const wc = monitorView && monitorView.webContents;
+    monitorCdpInterceptor.stop(wc);
+  } catch (e) {
+    logger.warn(`cleanupMonitorCDP 异常: ${e.message}`);
+  }
+  monitorCdpInterceptor = null;
+}
+
+/**
+ * 更新监控 BrowserView 尺寸（占满整个窗口）
+ */
+function updateMonitorViewBounds() {
+  if (!monitorWindow || !monitorView) return;
+  try {
+    const { width, height } = monitorWindow.getContentBounds();
+    monitorView.setBounds({ x: 0, y: 0, width, height });
+  } catch (e) {}
+}
+
+/**
+ * 关闭监控窗口（监控任务结束时调用）
+ */
+function closeMonitorWindow() {
+  cleanupMonitorCDP();
+  if (monitorWindow && !monitorWindow.isDestroyed()) {
+    try { monitorWindow.close(); } catch (e) {}
+  }
+  monitorWindow = null;
+  monitorView = null;
+}
+
+function getMonitorWindow() { return monitorWindow; }
+function getMonitorView() { return monitorView; }
+function getMonitorCDPInterceptor() { return monitorCdpInterceptor; }
 
 /**
  * 创建小红书独立窗口
@@ -554,7 +720,9 @@ function createXHSView() {
       contextIsolation: true,
       enableBlinkFeatures: '',
       disableBlinkFeatures: 'AutomationControlled',
-      webSecurity: false
+      webSecurity: false,
+      // 持久化分区：确保登录状态在应用重启后保留
+      partition: 'persist:xhs'
     }
   });
 
@@ -738,6 +906,13 @@ module.exports = {
   updateDouyinViewBounds,
   injectAntiDetection,
   cleanupCDP,
+  // 博主监控独立窗口
+  createMonitorWindow,
+  getMonitorWindow,
+  getMonitorView,
+  getMonitorCDPInterceptor,
+  closeMonitorWindow,
+  // 小红书独立窗口
   createXHSWindow,
   getXHSWindow,
   getXHSView,

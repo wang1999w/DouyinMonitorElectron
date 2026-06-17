@@ -27,6 +27,21 @@
       applyProgress(p);
     });
 
+    // ★ 监听任务完成事件（权威状态更新）— 无论正常/异常/停止都会触发
+    if (window.electronAPI.onRecommendCompleted) {
+      window.electronAPI.onRecommendCompleted((info) => {
+        setRecommendRunning(false);
+        document.getElementById('btn-recommend-pause').textContent = '暂停';
+        const statusEl = document.getElementById('rp-status');
+        if (statusEl) statusEl.textContent = info && info.success ? '已完成' : '已停止';
+        const barEl = document.getElementById('rp-bar');
+        if (barEl) barEl.style.width = '100%';
+        appendTaskLog('recommend', (info && info.success === false && info.reason === 'error')
+          ? `❌ 推荐浏览任务失败: ${info.message || '未知错误'}`
+          : (info && info.reason === 'user_stopped' ? '🛑 推荐浏览任务已停止' : '✅ 推荐浏览任务已完成'));
+      });
+    }
+
     // 设置结束时间默认值（当前时间+1小时）
     const now = new Date();
     now.setHours(now.getHours() + 1);
@@ -71,16 +86,26 @@
   }
 
   async function pauseRecommend() {
-    await window.electronAPI.pauseRecommend();
+    try {
+      await Promise.race([
+        window.electronAPI.pauseRecommend(),
+        new Promise(resolve => setTimeout(resolve, 2000))
+      ]);
+    } catch (e) { console.warn('pauseRecommend:', e); }
     const btn = document.getElementById('btn-recommend-pause');
     btn.textContent = btn.textContent === '暂停' ? '继续' : '暂停';
   }
 
   async function stopRecommend() {
-    await window.electronAPI.stopRecommend();
     setRecommendRunning(false);
     document.getElementById('btn-recommend-pause').textContent = '暂停';
     showProgress(false);
+    try {
+      await Promise.race([
+        window.electronAPI.stopRecommend(),
+        new Promise(resolve => setTimeout(resolve, 3000))
+      ]);
+    } catch (e) { console.warn('stopRecommend IPC error:', e); }
   }
 
   function setRecommendRunning(running) {
@@ -94,7 +119,8 @@
     const el = document.getElementById('recommend-status');
     if (el) el.textContent = msg;
 
-    if (msg.includes('完成') || msg.includes('停止') || msg.includes('失败')) {
+    // ★ 修复：只对任务级状态消息禁用按钮，不对普通日志禁用
+    if (msg.includes('推荐浏览任务已完成') || msg.includes('推荐浏览任务已停止') || msg.includes('推荐浏览任务失败')) {
       setRecommendRunning(false);
       document.getElementById('btn-recommend-pause').textContent = '暂停';
       document.getElementById('rp-status').textContent = msg.includes('完成') ? '已完成' : '已停止';

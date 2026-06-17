@@ -26,32 +26,83 @@ let searchRunning = false;
 let searchPaused = false;
 let logCallback = null;
 let currentTask = null;
+// ★ 新增：模块级 onComplete 回调存储，让 stopSearch/pauseSearch 也能正确触发
+let _completeCallback = null;
+let _lastMatchedTotal = 0;
 
 function checkRunning() { return searchRunning; }
 function isRunning() { return searchRunning; }
 function isPaused() { return searchPaused; }
 
-function stopSearch() {
+/**
+ * 停止搜索任务（可异步等待，确保任务完全停止后返回）
+ */
+async function stopSearch() {
+  if (!searchRunning && !searchPaused) {
+    log('🛑 当前无运行中的搜索任务');
+    return { stopped: false, reason: 'not_running' };
+  }
+  log('🛑 正在停止搜索任务...');
+
+  // ★ 记录当前任务状态，以便稍后在 onComplete 中传递
+  const matchedTotal = currentTask ? currentTask.matchedTotal : _lastMatchedTotal;
+
   searchRunning = false;
   searchPaused = false;
   if (currentTask) currentTask.stopped = true;
-  log('🛑 搜索已停止');
+  // ⚠️ 立即触发 videoProcessor 的模块级中断标志
+  videoProcessor.setInterruptFlag && videoProcessor.setInterruptFlag(true);
+
+  // 状态机更新
   const state = getStateMachine();
-  if (state.current === STATES.SEARCHING) {
-    state.transition(STATES.IDLE, { phase: 'stopped' });
+  if (state.current === STATES.SEARCHING || state.current === STATES.PAUSED) {
+    state.transition(STATES.IDLE, { phase: 'user_stopped' });
   }
+
+  // ★ 等待主循环检测到停止标志（最多1.5秒）
+  for (let i = 0; i < 15; i++) {
+    await sleep(100);
+  }
+
+  // ★ 关键增强：确保调用 onComplete 回调（触发前端 search-completed 事件）
+  // 即使主循环还没自然退出，这里也强制触发回调以更新前端状态
+  if (_completeCallback) {
+    try {
+      _completeCallback({ success: true, reason: 'user_stopped', matchedTotal });
+    } catch (e) {
+      logger.warn('stopSearch 调用 onComplete 异常: ' + e.message);
+    }
+    _completeCallback = null;  // 防止重复调用
+  }
+
+  log(`🛑 搜索任务已停止 (命中${matchedTotal}条意向)`);
+  return { stopped: true, reason: 'user_stopped', matchedTotal };
 }
 
-function pauseSearch() {
-  if (!searchRunning) return;
+/**
+ * 暂停/恢复搜索（可异步，返回实际状态）
+ */
+async function pauseSearch() {
+  if (!searchRunning) {
+    log('⏸ 当前无运行中的搜索任务，无法暂停');
+    return { paused: false, reason: 'not_running' };
+  }
   searchPaused = !searchPaused;
+  // ★ 修复：暂停时不设置 _globalInterrupted（那会导致processVideo完全退出）
+  // 暂停通过 shouldContinue 回调返回 false 来实现，processVideo 内部会等待恢复
+  // 只有停止时才设置 _globalInterrupted = true
+  if (videoProcessor.setInterruptFlag) {
+    videoProcessor.setInterruptFlag(false);  // 确保中断标志为false，暂停由shouldContinue处理
+  }
   const state = getStateMachine();
   if (searchPaused) {
     state.transition(STATES.PAUSED, { phase: 'user_paused' });
+    log('⏸ 已暂停（点击继续恢复）');
   } else {
     state.transition(STATES.SEARCHING, { phase: 'resumed' });
+    log('▶ 已继续');
   }
-  log(searchPaused ? '⏸ 暂停' : '▶ 继续');
+  return { paused: searchPaused };
 }
 
 // ========== 可中断等待 ==========
@@ -73,11 +124,21 @@ async function wait(min, max) {
 
 // ========== 主流程 ==========
 
-async function startSearch(params, onLog, onResult, onProgress) {
-  if (searchRunning) return;
+async function startSearch(params, onLog, onResult, onProgress, onComplete) {
+  if (searchRunning) {
+    log('⚠ 已有搜索任务正在运行，请先停止');
+    if (onComplete) onComplete({ success: false, reason: 'already_running' });
+    return;
+  }
   searchRunning = true;
   searchPaused = false;
+  // ⚠️ 重置 videoProcessor 模块级中断标志
+  if (videoProcessor.setInterruptFlag) videoProcessor.setInterruptFlag(false);
   logCallback = onLog;
+
+  // ★ 保存 onComplete 回调到模块级变量，让 stopSearch 也能触发
+  _completeCallback = onComplete;
+  _lastMatchedTotal = 0;
 
   // 规范化 keywords 参数：支持 keyword(字符串) / keywords(数组/字符串)
   if (!params.keywords) {
@@ -105,6 +166,18 @@ async function startSearch(params, onLog, onResult, onProgress) {
     if (!view || !view.webContents) { log('❌ 浏览器未就绪'); return; }
     const wc = view.webContents;
 
+    // 等待页面加载完成（防止 executeJavaScript 卡死）
+    log('  等待页面加载...');
+    let pageReady = false;
+    for (let i = 0; i < 20 && searchRunning; i++) {
+      const ready = await js(wc, 'document.readyState === "complete" || document.readyState === "interactive"');
+      const hasBody = await js(wc, 'document.body && document.body.innerText.length > 50');
+      if (ready === true && hasBody === true) { pageReady = true; break; }
+      await sleep(1000);
+    }
+    if (!pageReady) { log('  ⚠️ 页面加载超时，继续尝试...'); }
+    else { log('  ✅ 页面已就绪'); }
+
     // 检查登录
     const body = await js(wc, 'document.body.innerText.substring(0,300)') || '';
     if (body.includes('登录') && body.length < 100) {
@@ -116,11 +189,19 @@ async function startSearch(params, onLog, onResult, onProgress) {
       }
     }
 
-    // 检查验证码
+    // 检查验证码（最多等待 20 轮 = 60s，防止无限阻塞）
     if (await dom.hasCaptcha(view)) {
       log('⚠️ 验证码！请手动完成');
-      while (await dom.hasCaptcha(view) && searchRunning) await wait(3000);
-      log('✅ 验证码已通过');
+      let captchaRetry = 0;
+      while (await dom.hasCaptcha(view) && searchRunning && captchaRetry < 20) {
+        await wait(3000);
+        captchaRetry++;
+      }
+      if (captchaRetry >= 20) {
+        log('  ⚠️ 验证码等待超时（60s），继续执行（部分功能可能受限）');
+      } else {
+        log('✅ 验证码已通过');
+      }
     }
 
     const cfg = require('./config').loadConfig();
@@ -145,16 +226,39 @@ async function startSearch(params, onLog, onResult, onProgress) {
       await wait(2000, 3000);
 
       // 筛选
-      if (isQuantityMode && (params.sortMode !== 'default' || params.filterTime !== '0')) {
+      // 数量模式（sortEnabled）或时间模式都可以触发筛选
+      const isTimeMode = cutoffTs > 0;
+      const shouldFilter = (
+        (isQuantityMode && (params.sortMode !== 'default' || params.filterTime !== '0')) ||
+        (isTimeMode && (params.sortMode !== 'default' || params.filterTime !== '0' || params.commentHours <= 720))
+      );
+      if (shouldFilter) {
         log('筛选...');
-        await doFilter(view, params);
+        await doFilter(view, {
+          ...params,
+          isTimeMode: isTimeMode,
+          // 时间模式下，如果用户没指定排序方式，自动用"最新发布"
+          sortMode: params.sortMode || (isTimeMode ? 'newest' : 'likes'),
+          // 时间模式下，根据 commentHours 自动选择合理的 filterTime
+          filterTime: params.filterTime !== undefined ? String(params.filterTime) :
+            (isTimeMode ? (params.commentHours <= 24 ? '1' : params.commentHours <= 168 ? '7' : params.commentHours <= 720 ? '30' : '0') : '0'),
+          commentHours: params.commentHours
+        });
       }
 
       // 视频循环
       const target = isQuantityMode ? (params.maxVideos || 10) : 999;
       let count = 0, fails = 0, scrollTry = 0, sincePause = 0, pauseAfter = rand(2, 5);
+      const taskStartTs = Date.now();
+      const MAX_RUN_MS = 12 * 60 * 60 * 1000; // 全局最大 12 小时，防止遗忘停止时无限运行
 
       while (searchRunning && count < target) {
+        // 全局执行时间上限兜底：超过 12 小时自动停止
+        if (Date.now() - taskStartTs > MAX_RUN_MS) {
+          log('🛑 已达最大执行时间（12h），自动停止');
+          searchRunning = false;
+          break;
+        }
         const videos = await dom.scanVideoLinks(view);
         const unprocessed = videos.filter(v => !task.processedIds.has(v.aid));
 
@@ -194,7 +298,7 @@ async function startSearch(params, onLog, onResult, onProgress) {
           view, aid: v.aid,
           keywords: { intent: intentKw, garbage: garbageKw },
           cdp,
-          shouldContinue: () => searchRunning && !task.stopped,
+          shouldContinue: () => searchRunning && !searchPaused && !task.stopped,
           onResult,
           onLog: log,
           maxComments: params.maxComments || 200,
@@ -210,7 +314,9 @@ async function startSearch(params, onLog, onResult, onProgress) {
               } catch (_) {}
             }
           },
-          cutoffTs
+          cutoffTs,
+          commentHours,
+          commentSort: params.commentSort  // 用户预设的评论区排序方式
         });
 
         if (result.skipped) { fails++; log(`  跳过: ${result.skipped}`); }
@@ -227,7 +333,11 @@ async function startSearch(params, onLog, onResult, onProgress) {
           fails = 0;
           if (await dom.hasCaptcha(view)) {
             log('⚠️ 验证码！请手动完成');
-            while (await dom.hasCaptcha(view) && searchRunning) await wait(3000);
+            let captchaRetry2 = 0;
+            while (await dom.hasCaptcha(view) && searchRunning && captchaRetry2 < 20) {
+              await wait(3000);
+              captchaRetry2++;
+            }
           }
         }
 
@@ -243,14 +353,34 @@ async function startSearch(params, onLog, onResult, onProgress) {
       }
     }
 
-    log(`✅ 完成！共 ${task.matchedTotal} 条意向`);
+    // ★ 区分：正常完成 vs 用户主动停止（通过 _completeCallback 统一调用，避免重复）
+    if (task && task.stopped) {
+      log(`🛑 搜索任务已停止（共命中 ${task.matchedTotal} 条意向）`);
+      if (_completeCallback) {
+        try { _completeCallback({ success: true, reason: 'user_stopped', matchedTotal: task.matchedTotal }); }
+        catch (err) { logger.warn('正常完成 onComplete 异常: ' + err.message); }
+        _completeCallback = null;
+      }
+    } else {
+      log(`✅ 完成！共 ${task.matchedTotal} 条意向`);
+      if (_completeCallback) {
+        try { _completeCallback({ success: true, reason: 'finished', matchedTotal: task.matchedTotal }); }
+        catch (err) { logger.warn('正常完成 onComplete 异常: ' + err.message); }
+        _completeCallback = null;
+      }
+    }
   } catch (e) {
     // 错误分析 + 自动恢复
     const analyzed = getErrorAnalyzer().analyze(e, { phase: 'search_loop', task: 'search' });
-    log(`❌ [${analyzed.category}] ${analyzed.message} → ${analyzed.suggestion}`);
+    log(`❌ [${analyzed.category}] 搜索任务执行失败: ${analyzed.message} → ${analyzed.suggestion}`);
     getStateMachine().setError(analyzed.message, { category: analyzed.category });
     if (analyzed.severity === SEVERITY.FATAL) {
       getRecoveryManager().autoRecover(analyzed, { phase: 'search' }).catch(() => {});
+    }
+    if (_completeCallback) {
+      try { _completeCallback({ success: false, reason: 'error', message: analyzed.message, category: analyzed.category }); }
+      catch (err) { logger.warn('错误 onComplete 异常: ' + err.message); }
+      _completeCallback = null;
     }
   } finally {
     searchRunning = false;
@@ -346,7 +476,11 @@ async function doSearch(view, keyword) {
 
   if (await dom.hasCaptcha(view)) {
     log('  ⚠️ 验证码！');
-    while (await dom.hasCaptcha(view) && searchRunning) await wait(3000);
+    let captchaRetry3 = 0;
+    while (await dom.hasCaptcha(view) && searchRunning && captchaRetry3 < 20) {
+      await wait(3000);
+      captchaRetry3++;
+    }
   }
   return true;
 }
@@ -406,20 +540,46 @@ async function doFilter(view, params) {
   log('  ✓ 筛选面板已展开');
 
   // === 3. 选择排序 ===
-  const sortMap = { likes: '最多点赞', newest: '最新发布' };
-  if (params.sortMode && sortMap[params.sortMode]) {
-    const r = await _clickFilterOptionInPanel(view, sortMap[params.sortMode]);
-    if (r.success) log(`  ✓ 排序: ${sortMap[params.sortMode]} @(${r.x},${r.y})`);
-    else log(`  ❌ 排序未找到: ${sortMap[params.sortMode]} (${r.error})`);
+  // 扩展的排序选项：用户可以自由选择
+  //   likes      = 最多点赞 (默认数量模式)
+  //   newest     = 最新发布 (默认时间模式)
+  //   comment    = 最多评论
+  //   collection = 最多收藏
+  //   share      = 最多转发
+  //   default    = 综合
+  const sortMap = {
+    likes: '最多点赞',
+    newest: '最新发布',
+    comment: '最多评论',
+    collection: '最多收藏',
+    share: '最多转发',
+    default: '综合排序'
+  };
+  // 如果是时间模式（cutoffTs > 0），自动使用 newest；数量模式自动使用 likes
+  const finalSortMode = params.sortMode || (params.isTimeMode ? 'newest' : 'likes');
+  if (finalSortMode && sortMap[finalSortMode]) {
+    const r = await _clickFilterOptionInPanel(view, sortMap[finalSortMode]);
+    if (r.success) log(`  ✓ 排序: ${sortMap[finalSortMode]} (模式: ${finalSortMode}) @(${r.x},${r.y})`);
+    else log(`  ❌ 排序未找到: ${sortMap[finalSortMode]} (${r.error})`);
     await sleep(1500, 2500);
   }
 
   // === 4. 选择时间 ===
-  const timeMap = { '1': '一天内', '7': '一周内', '180': '半年内' };
-  if (params.filterTime && timeMap[params.filterTime]) {
-    const r = await _clickFilterOptionInPanel(view, timeMap[params.filterTime]);
-    if (r.success) log(`  ✓ 时间: ${timeMap[params.filterTime]} @(${r.x},${r.y})`);
-    else log(`  ❌ 时间未找到: ${timeMap[params.filterTime]} (${r.error})`);
+  // 扩展的时间选项：用户可以自由选择
+  //   0   = 不限时间
+  //   1   = 一天内 (24小时内)
+  //   7   = 一周内
+  //   30  = 一月内
+  //   180 = 半年内
+  const timeMap = { '0': '不限', '1': '一天内', '7': '一周内', '30': '一月内', '180': '半年内' };
+  const finalFilterTime = params.filterTime !== undefined ? String(params.filterTime) :
+    (params.isTimeMode && params.commentHours ?
+      (params.commentHours <= 24 ? '1' : params.commentHours <= 168 ? '7' : params.commentHours <= 720 ? '30' : '0')
+      : '0');
+  if (finalFilterTime && timeMap[finalFilterTime]) {
+    const r = await _clickFilterOptionInPanel(view, timeMap[finalFilterTime]);
+    if (r.success) log(`  ✓ 时间: ${timeMap[finalFilterTime]} (filterTime=${finalFilterTime}) @(${r.x},${r.y})`);
+    else log(`  ❌ 时间未找到: ${timeMap[finalFilterTime]} (${r.error})`);
     await sleep(1500, 2500);
   }
 
@@ -585,9 +745,51 @@ async function _clickFilterOptionInPanel(view, text) {
 
 // ========== 工具 ==========
 
-async function js(wc, s) { try { return await wc.executeJavaScript(s); } catch(_) { return null; } }
+async function js(wc, s, timeoutMs = 15000) {
+  try {
+    return await Promise.race([
+      wc.executeJavaScript(s),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('js_timeout')), timeoutMs))
+    ]);
+  } catch (e) {
+    if (e && e.message === 'js_timeout') {
+      logger.warn(`[SearchEngine] js 调用超时 (${timeoutMs}ms): ${s.substring(0, 80)}`);
+    }
+    return null;
+  }
+}
 function log(msg) { logger.info(msg); if (logCallback) logCallback(msg); }
-function sleep(a, b) { const ms = b ? rand(a, b) : a; return new Promise(r => setTimeout(r, ms)); }
+function sleep(a, b) {
+  const ms = b ? rand(a, b) : a;
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const check = () => {
+      const elapsed = Date.now() - start;
+      if (elapsed >= ms) return resolve();
+      if (!searchRunning) {
+        logger.info('[SearchEngine] sleep: 任务已停止，中断等待');
+        return resolve();
+      }
+      if (searchPaused) {
+        logger.info('[SearchEngine] sleep: 任务已暂停，等待恢复...');
+        const resumeCheck = setInterval(() => {
+          if (!searchRunning) {
+            clearInterval(resumeCheck);
+            return resolve();
+          }
+          if (!searchPaused) {
+            clearInterval(resumeCheck);
+            logger.info('[SearchEngine] sleep: 任务已恢复');
+            check();
+          }
+        }, 300);
+        return;
+      }
+      setTimeout(check, Math.min(300, ms - elapsed));
+    };
+    setTimeout(check, Math.min(300, ms));
+  });
+}
 function rand(a, b) { return Math.floor(Math.random() * (b - a) + a); }
 
 module.exports = { startSearch, stopSearch, pauseSearch, isRunning, isPaused };

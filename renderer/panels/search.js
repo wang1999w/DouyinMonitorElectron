@@ -37,6 +37,20 @@
       appendTaskLog('search', msg);
     });
     window.electronAPI.onSearchResult((result) => addSearchResult(result));
+    // ★ 监听任务完成事件（权威状态更新）— 无论正常/异常/停止都会触发
+    if (window.electronAPI.onSearchCompleted) {
+      window.electronAPI.onSearchCompleted((info) => {
+        setSearchRunning(false);
+        document.getElementById('btn-search-pause').textContent = '暂停';
+        const statusEl = document.getElementById('sp-status');
+        if (statusEl) statusEl.textContent = info && info.success ? '已完成' : '已停止';
+        const barEl = document.getElementById('sp-bar');
+        if (barEl) barEl.style.width = '100%';
+        appendTaskLog('search', (info && info.success === false && info.reason === 'error')
+          ? `❌ 搜索任务失败: ${info.message || '未知错误'}`
+          : (info && info.reason === 'user_stopped' ? '🛑 搜索任务已停止' : '✅ 搜索任务已完成'));
+      });
+    }
     // 事件驱动进度（不再依赖日志正则）
     document.addEventListener('search-progress', (e) => applyProgress(e.detail));
     restoreSchedule();
@@ -98,16 +112,31 @@
   }
 
   async function pauseSearch() {
-    await window.electronAPI.pauseSearch();
+    try {
+      // ★ 加超时防止阻塞UI
+      await Promise.race([
+        window.electronAPI.pauseSearch(),
+        new Promise(resolve => setTimeout(resolve, 2000))
+      ]);
+    } catch (e) { console.warn('pauseSearch:', e); }
     const btn = document.getElementById('btn-search-pause');
     btn.textContent = btn.textContent === '暂停' ? '继续' : '暂停';
   }
 
   async function stopSearch() {
-    await window.electronAPI.stopSearch();
+    // ★ 立即更新UI（不等后端响应，防止按钮卡死）
     setSearchRunning(false);
     document.getElementById('btn-search-pause').textContent = '暂停';
     showProgress(false);
+    // ★ 后台发送停止命令（加超时保护）
+    try {
+      await Promise.race([
+        window.electronAPI.stopSearch(),
+        new Promise(resolve => setTimeout(resolve, 3000))
+      ]);
+    } catch (e) {
+      console.warn('stopSearch IPC error:', e);
+    }
   }
 
   function setSearchRunning(running) {
@@ -126,7 +155,9 @@
       const kw = msg.split('搜索关键词:')[1]?.trim() || '';
       document.getElementById('sp-keyword').textContent = `关键词: ${kw}`;
     }
-    if (msg.includes('完成') || msg.includes('停止') || msg.includes('失败')) {
+    // ★ 修复：只对任务级状态消息禁用按钮，不对普通日志禁用
+    // 之前"评论采集完成"、"加载失败"等普通日志会误触发setSearchRunning(false)
+    if (msg.includes('搜索任务已完成') || msg.includes('搜索任务已停止') || msg.includes('搜索任务失败')) {
       setSearchRunning(false);
       document.getElementById('btn-search-pause').textContent = '暂停';
       document.getElementById('sp-status').textContent = msg.includes('完成') ? '已完成' : '已停止';

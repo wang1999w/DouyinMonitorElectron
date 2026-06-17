@@ -45,12 +45,80 @@ async function initDatabase() {
 
   initTables();
   applyMigrations();
+  cleanupExpiredData();  // 自动清理过期数据（只保留最近2天）
   scheduleSave();
 }
 
 async function getDb() {
   if (!db) await initDatabase();
   return db;
+}
+
+/**
+ * 清理过期数据（只保留最近2天的业务数据，避免数据库无限增长）
+ *  - 评论数据：保留今天和昨天
+ *  - 视频/笔记：仅保留与近期评论关联的
+ *  - 运行日志：保留最近3天
+ */
+function cleanupExpiredData() {
+  if (!db) return;
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const now = Math.floor(Date.now() / 1000);
+    const keepCommentDays = 2;
+    const cutoffTs = now - keepCommentDays * 86400;
+    const logCutoff = now - 3 * 86400;
+
+    // 1. 清理过期的抖音意向评论（删除3天前及更早的数据）
+    let delComments = 0;
+    try {
+      const r = db.run(`DELETE FROM intent_comments WHERE capture_date NOT IN ('${today}', '${yesterday}')`);
+      delComments = r && typeof r.changes === 'number' ? r.changes : 0;
+    } catch (_) {}
+
+    // 2. 清理过期的小红书意向评论
+    let delXhsComments = 0;
+    try {
+      const r = db.run(`DELETE FROM xhs_intent_comments WHERE capture_date NOT IN ('${today}', '${yesterday}')`);
+      delXhsComments = r && typeof r.changes === 'number' ? r.changes : 0;
+    } catch (_) {}
+
+    // 3. 清理无关联的视频记录（只保留与近期评论关联的视频）
+    let delVideos = 0;
+    try {
+      const r = db.run(`DELETE FROM monitor_videos WHERE aweme_id NOT IN (SELECT aweme_id FROM intent_comments WHERE capture_date IN ('${today}', '${yesterday}'))`);
+      delVideos = r && typeof r.changes === 'number' ? r.changes : 0;
+    } catch (_) {}
+
+    // 4. 清理过期小红书笔记
+    let delNotes = 0;
+    try {
+      const r = db.run(`DELETE FROM xhs_notes WHERE note_id NOT IN (SELECT note_id FROM xhs_intent_comments WHERE capture_date IN ('${today}', '${yesterday}'))`);
+      delNotes = r && typeof r.changes === 'number' ? r.changes : 0;
+    } catch (_) {}
+
+    // 5. 清理3天前的运行日志
+    try {
+      db.run('DELETE FROM run_logs WHERE create_time < ' + logCutoff);
+    } catch (_) {}
+
+    // 6. 清理3天前的通知日志
+    try {
+      db.run('DELETE FROM notify_logs WHERE create_time < ' + logCutoff);
+    } catch (_) {}
+
+    // 7. 记录本次清理信息到 meta 表
+    try {
+      const ts = now;
+      db.run(`INSERT OR REPLACE INTO meta (key, value, updated_at) VALUES ('last_cleanup', '${today}', ${ts})`);
+    } catch (_) {}
+
+    dirty = true;
+    logger.info(`[数据库] 过期数据清理完成: 抖音评论-${delComments}条, 小红书评论-${delXhsComments}条, 旧视频-${delVideos}条, 旧笔记-${delNotes}条`);
+  } catch (e) {
+    logger.warn(`[数据库] 清理过期数据失败: ${e.message}`);
+  }
 }
 
 /**
@@ -70,16 +138,34 @@ function scheduleSave() {
 async function saveToDisk() {
   if (!db || saving) return false;
   saving = true;
+  const MAX_RETRIES = 5;
+  const RETRY_INTERVAL = 500;
   try {
     const data = db.export();
     const buffer = Buffer.from(data);
-    // 临时文件 + rename 保证原子性
     const tmp = DB_PATH + '.tmp';
     await fsp.writeFile(tmp, buffer);
-    await fsp.rename(tmp, DB_PATH);
-    dirty = false;
-    pendingWrites = 0;
-    return true;
+    let lastError = null;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        await fsp.rename(tmp, DB_PATH);
+        dirty = false;
+        pendingWrites = 0;
+        if (attempt > 1) {
+          logger.info(`数据库保存成功（第 ${attempt} 次重试）`);
+        }
+        return true;
+      } catch (e) {
+        lastError = e;
+        if (e.code === 'EBUSY' || e.code === 'EACCES' || e.code === 'EPERM') {
+          logger.warn(`数据库保存第 ${attempt}/${MAX_RETRIES} 次失败（${e.code}），${RETRY_INTERVAL}ms 后重试`);
+          await new Promise(r => setTimeout(r, RETRY_INTERVAL));
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw lastError || new Error('save failed after retries');
   } catch (e) {
     logger.error(`数据库保存失败: ${e.message}`);
     try {
@@ -199,6 +285,13 @@ function initTables() {
     CREATE INDEX IF NOT EXISTS idx_intent_email_sent ON intent_comments(email_sent);
     CREATE INDEX IF NOT EXISTS idx_intent_aweme_id ON intent_comments(aweme_id);
     CREATE INDEX IF NOT EXISTS idx_intent_capture_time ON intent_comments(capture_time);
+
+    -- 元信息表（记录清理日期等配置）
+    CREATE TABLE IF NOT EXISTS meta (
+      key TEXT PRIMARY KEY,
+      value TEXT,
+      updated_at INTEGER
+    );
   `);
 }
 
@@ -661,6 +754,7 @@ module.exports = {
   clearIntentComments,
   getLeads,
   saveToDisk,
+  cleanupExpiredData,
   addXHSIntentComment,
   getXHSStats,
   getXHSRecentMatchesPage,

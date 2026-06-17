@@ -120,6 +120,8 @@ class StateMachine {
       return;
     }
     this._saving = true;
+    const MAX_RETRIES = 5;
+    const RETRY_INTERVAL = 500;
     try {
       const tmp = STATE_FILE + '.tmp';
       const data = {
@@ -133,7 +135,26 @@ class StateMachine {
         updatedAt: this.updatedAt
       };
       fs.writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8');
-      fs.renameSync(tmp, STATE_FILE);
+      let lastErr = null;
+      for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+          fs.renameSync(tmp, STATE_FILE);
+          if (attempt > 1) {
+            logger.info(`状态写盘成功（第 ${attempt} 次重试）`);
+          }
+          return;
+        } catch (e) {
+          lastErr = e;
+          if (e.code === 'EBUSY' || e.code === 'EACCES' || e.code === 'EPERM') {
+            logger.warn(`状态写盘第 ${attempt}/${MAX_RETRIES} 次失败（${e.code}），${RETRY_INTERVAL}ms 后重试`);
+            const waitUntil = Date.now() + RETRY_INTERVAL;
+            while (Date.now() < waitUntil) { /* 空转等待 */ }
+            continue;
+          }
+          throw e;
+        }
+      }
+      throw lastErr || new Error('state save failed after retries');
     } catch (e) {
       logger.error(`状态写盘失败: ${e.message}`);
     } finally {

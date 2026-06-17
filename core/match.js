@@ -238,7 +238,7 @@ function matchIntent(text, intentKeywords, garbageKeywords) {
 }
 
 /**
- * 计算评论时效评分（保持原签名）
+ * 计算评论时效评分（保持原签名，兼容旧代码）
  * @param {number} commentTime - Unix 时间戳（秒）
  * @returns {number} 1|5|10
  */
@@ -253,6 +253,50 @@ function calcCommentScore(commentTime) {
     if (diffMin <= 15) return 10;   // 15分钟内
     if (diffMin <= 40) return 5;    // 40分钟内
     return 1;                        // 超过40分钟
+  } catch (e) {
+    return 1;
+  }
+}
+
+/**
+ * 计算评论时效评分（动态版）- 根据用户设置的时间范围计算评分
+ * ⚠️ 核心修复：评分应该反映用户设置的 commentHours，而不是固定15/40分钟
+ * @param {number} commentTime - Unix 时间戳（秒）
+ * @param {number} cutoffTs - 时间截止阈值（秒）。评论时间 < cutoffTs 视为过期
+ * @param {number} commentHours - 用户设置的评论时效（小时）
+ * @returns {number} 1-10 评分
+ */
+function calcCommentScoreAdvanced(commentTime, cutoffTs, commentHours) {
+  try {
+    const ct = parseInt(commentTime);
+    const now = Math.floor(Date.now() / 1000);
+
+    // 无有效时间：给低分
+    if (isNaN(ct) || ct <= 0) return 1;
+
+    // 时间判断：过期评论给最低分
+    if (cutoffTs > 0 && ct < cutoffTs) {
+      return 1;
+    }
+
+    // 时间差（分钟）- 评论是多久之前的
+    const diffMin = (now - ct) / 60.0;
+    if (diffMin < 0) return 10;  // 未来时间（可能是时区问题），给满分
+
+    // ⚠️ 关键：根据 commentHours 动态计算评分
+    // 例如：commentHours=60小时 → 60小时内的评论都有较高评分
+    const totalMin = (commentHours || 60) * 60;
+    const ratio = diffMin / totalMin;  // 0 = 刚刚, 1 = 刚好到 cutoffTs
+
+    // 线性评分：
+    // - 前1/3时间内 → 10分（很新）
+    // - 前2/3时间内 → 5分（中等）
+    // - 超过2/3但仍在范围内 → 3分（较旧但有效）
+    // - 超过范围 → 1分（过期）
+    if (ratio < 0.33) return 10;
+    if (ratio < 0.66) return 5;
+    if (ratio < 1.0) return 3;
+    return 1;
   } catch (e) {
     return 1;
   }
@@ -296,6 +340,7 @@ module.exports = {
   isAdText,
   // 时效
   calcCommentScore,
+  calcCommentScoreAdvanced,
   // 工具
   levenshtein
 };

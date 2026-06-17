@@ -68,10 +68,14 @@ async function humanPause(wc, duration) {
 
 async function safeSend(wc, event) {
   try {
-    await wc.sendInputEvent(event);
+    // ★ 添加超时：防止浏览器卡死导致任务无法停止（最多等待 5 秒）
+    await Promise.race([
+      wc.sendInputEvent(event),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('sendInputEvent_timeout')), 5000))
+    ]);
     return true;
   } catch (e) {
-    // 静默忽略 - BrowserView 切换/页面跳转时偶发
+    // 静默忽略 - BrowserView 切换/页面跳转时偶发，或超时
     return false;
   }
 }
@@ -232,18 +236,86 @@ async function mouseScroll(wc, direction = 'down', times) {
   }
 }
 
+// 针对指定坐标发送鼠标滚轮事件（用于精准滚动评论区等容器）
+async function mouseScrollAt(wc, direction = 'down', times, posX, posY) {
+  const count = times || rand(3, 6);
+  const cx = posX || 600;
+  const cy = posY || 400;
+  for (let i = 0; i < count; i++) {
+    const t = i / count;
+    const base = direction === 'up' ? -rand(80, 200) : rand(80, 200);
+    const accel = Math.sin(t * Math.PI) * 0.5 + 0.5; // 0.5-1.0
+    const deltaY = Math.round(base * (0.7 + accel * 0.3));
+    // 先移动到目标位置，再发送滚轮事件
+    await safeSend(wc, { type: 'mouseMove', x: cx + rand(-5, 5), y: cy + rand(-5, 5) });
+    await sleep(rand(30, 80));
+    await safeSend(wc, {
+      type: 'mouseWheel',
+      x: cx + rand(-3, 3),
+      y: cy + rand(-3, 3),
+      deltaX: 0,
+      deltaY
+    });
+    await sleep(rand(100, 300));
+  }
+}
+
 async function keyPress(wc, key, modifiers) {
   const mods = (modifiers || []).map(m => m.toLowerCase());
-  // 特殊键映射：key -> code
-  const keyCodes = {
-    'Enter': 'Enter', 'Escape': 'Escape', 'Tab': 'Tab', 'Backspace': 'Backspace',
-    'Delete': 'Delete', 'ArrowUp': 'ArrowUp', 'ArrowDown': 'ArrowDown',
-    'ArrowLeft': 'ArrowLeft', 'ArrowRight': 'ArrowRight', 'Space': 'Space'
-  };
-  const code = keyCodes[key] || key;
-  await safeSend(wc, { type: 'keyDown', key, code, keyCode: key, modifiers: mods });
-  await sleep(rand(30, 60));
-  await safeSend(wc, { type: 'keyUp', key, code, keyCode: key, modifiers: mods });
+  const keyCodeMap = { 'Enter': 13, 'Escape': 27, 'Tab': 9, 'Backspace': 8, 'Delete': 46, 'ArrowUp': 38, 'ArrowDown': 40, 'ArrowLeft': 37, 'ArrowRight': 39, 'Space': 32 };
+  const isLetter = key.length === 1;
+  const code = isLetter ? 'Key' + key.toUpperCase() : (keyCodeMap[key] ? key : key);
+  const keyCode = keyCodeMap[key] || (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
+  const keyVal = isLetter ? key.toLowerCase() : key;
+
+  // 1. 先确保页面有焦点（快捷键监听需要焦点）
+  try {
+    await wc.executeJavaScript(`
+      (function(){
+        try {
+          if (document.body) {
+            document.body.focus({preventScroll: true});
+            window.focus();
+          }
+        } catch(e) {}
+      })()
+    `);
+  } catch (e) {}
+  await sleep(rand(30, 80));
+
+  // 2. sendInputEvent（Chrome的真实输入事件 - isTrusted=true）
+  let ok = false;
+  try {
+    await wc.sendInputEvent({ type: 'keyDown', key: keyVal, code, keyCode: keyCode, modifiers: mods });
+    await sleep(rand(20, 50));
+    await wc.sendInputEvent({ type: 'keyUp', key: keyVal, code, keyCode: keyCode, modifiers: mods });
+    ok = true;
+  } catch (e) {}
+
+  // 3. fallback：dispatch到 window + document + body（三方同时触发，确保不遗漏）
+  if (wc && typeof wc.executeJavaScript === 'function') {
+    try {
+      await wc.executeJavaScript(`
+        (function(){
+          var opts = {
+            key: '${keyVal}',
+            code: '${code}',
+            keyCode: ${keyCode},
+            which: ${keyCode},
+            bubbles: true,
+            cancelable: true
+          };
+          var targets = [window, document, document.body];
+          for (var t = 0; t < targets.length; t++) {
+            if (!targets[t]) continue;
+            try { targets[t].dispatchEvent(new KeyboardEvent('keydown', opts)); } catch(e){}
+            try { targets[t].dispatchEvent(new KeyboardEvent('keypress', opts)); } catch(e){}
+            try { targets[t].dispatchEvent(new KeyboardEvent('keyup', opts)); } catch(e){}
+          }
+        })()
+      `);
+    } catch (e) {}
+  }
   await sleep(rand(30, 60));
 }
 
@@ -324,6 +396,7 @@ module.exports = {
   doubleClick,
   mouseHover,
   mouseScroll,
+  mouseScrollAt,
   keyPress,
   typeText,
   humanPause,

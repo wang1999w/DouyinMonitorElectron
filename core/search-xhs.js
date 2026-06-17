@@ -60,9 +60,9 @@ async function startSearch(params, onLog, onResult, onProgress, getViewFn, getCd
     const intentKw = cfg.xhs_search_intent_keywords || cfg.search_intent_keywords || [];
     const garbageKw = cfg.xhs_search_garbage_keywords || cfg.search_garbage_keywords || [];
     const keywords = params.keywords || [];
-    // 小红书搜索结果的评论可能跨越数天，默认使用7天窗口（而非60分钟）
-    const commentMins = params.commentHours ? params.commentHours * 60 : 7 * 24 * 60;
-    const cutoffTs = Math.floor(Date.now() / 1000) - commentMins * 60;
+    // 评论时效（小时）：默认1小时=60分钟，与其他模块一致；严格按时间戳过滤
+    const commentHours = params.commentHours || 1;
+    const cutoffTs = Math.floor(Date.now() / 1000) - commentHours * 3600;
 
     // 合并筛选参数（优先使用params，降级到config配置）
     const filterParams = {
@@ -139,7 +139,14 @@ async function startSearch(params, onLog, onResult, onProgress, getViewFn, getCd
               } catch (_) {}
             }
           },
-          cutoffTs
+          cutoffTs,
+          videoInfo: {
+            note_id: n.noteId,
+            title: n.title || '',
+            author: n.author || '',
+            author_url: n.authorUrl || '',
+            note_url: 'https://www.xiaohongshu.com/explore/' + n.noteId
+          }
         });
 
         if (result.skipped) { log(`  跳过: ${result.skipped}`); }
@@ -164,136 +171,76 @@ async function startSearch(params, onLog, onResult, onProgress, getViewFn, getCd
 async function doSearch(view, keyword) {
   const wc = view.webContents;
 
-  // 严格模拟人类搜索行为：点击搜索框 → 输入关键词 → 点击搜索图标/回车
-  // 先确保在小红书域名下（如果不在才导航到首页）
+  // 确保在小红书页面
   const currentUrl = await dom.execJS(wc, 'location.href') || '';
   if (!currentUrl.includes('xiaohongshu.com')) {
     await wc.loadURL('https://www.xiaohongshu.com');
     await dom.sleep(3000, 5000);
-    // 模拟人类进入首页后的浏览行为
     await human.humanPause(wc, human.rand(1500, 3000));
   }
 
-  // 查找搜索框
+  // 找到搜索框位置，先做一次真实点击（聚焦 + 模拟人类行为）
   const searchInput = await dom.findSearchInput(view);
-  if (!searchInput) {
-    log('  ❌ 未找到搜索框，无法模拟搜索');
-    return false;
-  }
-
-  log(`  模拟点击搜索框 (${searchInput.x},${searchInput.y})...`);
+  if (!searchInput) { log('  - not found search box'); return false; }
+  log('  - click search box at (' + searchInput.x + ',' + searchInput.y + ')');
   await human.humanClick(wc, searchInput.x, searchInput.y);
   await dom.sleep(500, 1000);
 
-  // 清空已有内容：先检测搜索框是否有文本，有则用Delete键删除（不用Ctrl+A）
-  const hasText = await dom.execJS(wc, `(function(){
-    var textareas = document.querySelectorAll('textarea.textarea, textarea[name="aiSearchTextarea"]');
-    var target = null;
-    for (var i = 0; i < textareas.length; i++) {
-      var r = textareas[i].getBoundingClientRect();
-      if (r.width > 50 && r.height > 10) { target = textareas[i]; break; }
-    }
-    if (!target) {
-      var inputs = document.querySelectorAll('input.search-input');
-      for (var j = 0; j < inputs.length; j++) {
-        var ir = inputs[j].getBoundingClientRect();
-        if (ir.width > 0 && ir.height > 0) { target = inputs[j]; break; }
-      }
-    }
-    if (!target) return false;
-    return (target.value || '').length > 0;
-  })()`);
-  if (hasText) {
-    log('  检测到搜索框有文本，用Delete键清空...');
-    // 用Delete键删除（模拟人类逐字删除，按多次Delete直到清空）
-    for (let i = 0; i < 30; i++) {
-      await human.keyPress(wc, 'Delete');
-      await dom.sleep(30, 80);
-      const stillHasText = await dom.execJS(wc, `(function(){
-        var textareas = document.querySelectorAll('textarea.textarea, textarea[name="aiSearchTextarea"]');
-        var target = null;
-        for (var i = 0; i < textareas.length; i++) {
-          var r = textareas[i].getBoundingClientRect();
-          if (r.width > 50 && r.height > 10) { target = textareas[i]; break; }
-        }
-        if (!target) {
-          var inputs = document.querySelectorAll('input.search-input');
-          for (var j = 0; j < inputs.length; j++) {
-            var ir = inputs[j].getBoundingClientRect();
-            if (ir.width > 0 && ir.height > 0) { target = inputs[j]; break; }
-          }
-        }
-        if (!target) return false;
-        return (target.value || '').length > 0;
-      })()`);
-      if (!stillHasText) break;
-    }
-    await dom.sleep(200, 400);
-  }
+  // JS注入：聚焦 + 清空搜索框（React感知）
+  await dom.execJS(wc, '(function(){var cs=document.querySelectorAll(\'textarea, input\');var t=null;for(var i=0;i<cs.length;i++){var r=cs[i].getBoundingClientRect();if(r.width>50&&r.height>10){t=cs[i];break;}}if(!t)return false;try{t.focus();t.value=\'\';t.dispatchEvent(new Event(\'input\',{bubbles:true}));}catch(e){return false;}return true;})()');
+  await dom.sleep(200, 400);
 
-  // 输入中文关键词
-  // sendInputEvent的char事件对中文支持不好，用JS设置值但模拟真人IME输入节奏
-  log(`  输入关键词: ${keyword}`);
-  // 模拟IME输入法的思考过程
-  await human.humanPause(wc, 300 + Math.floor(Math.random() * 500));
-  await dom.setSearchInputValue(view, keyword);
+  // 设置关键词（使用 value setter + input/change 事件确保 React 感知）
+  log('  - set keyword: ' + keyword);
+  let kwSafe = keyword;
+  try { kwSafe = keyword.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/'/g, "\\'").replace(/\r?\n/g, ''); } catch(e) {}
+  const setKwScript = '(function(){var cs=document.querySelectorAll(\'textarea, input\');var t=null;for(var i=0;i<cs.length;i++){var r=cs[i].getBoundingClientRect();if(r.width>50&&r.height>10){t=cs[i];break;}}if(!t)return false;try{t.focus();}catch(e){}var kw=\"' + kwSafe + '\";try{var proto=t.tagName===\'TEXTAREA\'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;var setter=Object.getOwnPropertyDescriptor(proto,\'value\').set;setter.call(t,kw);}catch(e){t.value=kw;}try{t.dispatchEvent(new Event(\'input\',{bubbles:true}));t.dispatchEvent(new Event(\'change\',{bubbles:true}));}catch(e){}return true;})()';
+  let setOk = false;
+  try { setOk = await dom.execJS(wc, setKwScript); } catch(e) { log('  - execJS err: ' + e.message); }
+  if (!setOk) {
+    log('  - JS set failed, use dom.setSearchInputValue fallback');
+    await dom.setSearchInputValue(view, keyword);
+  }
   await dom.sleep(300, 600);
 
-  // 方式1: 模拟按回车搜索
-  log('  模拟按回车搜索...');
+  // ===== 触发搜索：4 层 fallback ===== 
+
+  // 方式1：sendInputEvent 发送 Enter 键
+  log('  - try press Enter (sendInputEvent)');
   await human.keyPress(wc, 'Enter');
   await dom.sleep(3000, 5000);
-
-  // 验证搜索结果页
   let url = await dom.execJS(wc, 'location.href') || '';
-  if (url.includes('search_result') || url.includes('search')) {
-    log('  ✓ 搜索页已加载（回车方式）');
-    return true;
-  }
+  if (url.includes('search_result') || url.includes('search')) { log('  + loaded (Enter)'); return true; }
 
-  // 方式2: 回车未触发，模拟点击搜索图标
-  log('  回车未触发搜索，尝试点击搜索图标...');
+  // 方式2：JS 注入键盘事件（对 React/Vue 更可靠）
+  log('  - try JS keyboard event injection');
+  await dom.execJS(wc, '(function(){var cs=document.querySelectorAll(\'textarea, input\');var t=null;for(var i=0;i<cs.length;i++){var r=cs[i].getBoundingClientRect();if(r.width>50&&r.height>10){t=cs[i];break;}}if(!t)t=document.body;try{t.focus();}catch(e){}var opts={key:\'Enter\',code:\'Enter\',keyCode:13,which:13,bubbles:true,cancelable:true};var ok=false;try{t.dispatchEvent(new KeyboardEvent(\'keydown\',opts));ok=true;}catch(e){}try{t.dispatchEvent(new KeyboardEvent(\'keypress\',opts));ok=true;}catch(e){}try{t.dispatchEvent(new KeyboardEvent(\'keyup\',opts));ok=true;}catch(e){}return ok;})()');
+  await dom.sleep(3000, 5000);
+  url = await dom.execJS(wc, 'location.href') || '';
+  if (url.includes('search_result') || url.includes('search')) { log('  + loaded (JS)'); return true; }
+
+  // 方式3：点击搜索图标
+  log('  - try click search icon');
   const searchBtn = await dom.findSearchButton(view);
   if (searchBtn) {
-    log(`  点击搜索图标 (${searchBtn.x},${searchBtn.y})...`);
+    log('  - click (' + searchBtn.x + ',' + searchBtn.y + ')');
     await human.humanClick(wc, searchBtn.x, searchBtn.y);
     await dom.sleep(3000, 5000);
     url = await dom.execJS(wc, 'location.href') || '';
-    if (url.includes('search_result') || url.includes('search')) {
-      log('  ✓ 搜索页已加载（点击图标方式）');
-      return true;
-    }
+    if (url.includes('search_result') || url.includes('search')) { log('  + loaded (click)'); return true; }
   }
 
-  // 方式3: 最后尝试再次点击搜索框+回车（有时第一次点击没聚焦）
-  log('  再次尝试点击搜索框+回车...');
-  const searchInput2 = await dom.findSearchInput(view);
-  if (searchInput2) {
-    await human.humanClick(wc, searchInput2.x, searchInput2.y);
-    await dom.sleep(500, 1000);
-    // 用Delete键清空（不用Ctrl+A）
-    for (let i = 0; i < 30; i++) {
-      await human.keyPress(wc, 'Delete');
-      await dom.sleep(30, 80);
-    }
-    await human.humanPause(wc, 300 + Math.floor(Math.random() * 500));
-    await dom.setSearchInputValue(view, keyword);
-    await dom.sleep(300, 600);
-    await human.keyPress(wc, 'Enter');
-    await dom.sleep(3000, 5000);
-    url = await dom.execJS(wc, 'location.href') || '';
-    if (url.includes('search_result') || url.includes('search')) {
-      log('  ✓ 搜索页已加载（重试方式）');
-      return true;
-    }
-  }
+  // 方式4：终极 fallback - 直接 loadURL 跳转搜索结果页
+  log('  - all modes failed, direct URL load fallback');
+  await dom.loadSearchURL(view, keyword);
+  await dom.sleep(3000, 5000);
+  url = await dom.execJS(wc, 'location.href') || '';
+  if (url.includes('search_result') || url.includes('search')) { log('  + loaded (URL)'); return true; }
 
-  log('  ❌ 模拟搜索失败');
+  log('  - search FAILED (url=' + url + ')');
   return false;
 }
 
-// 跳过点点AI区域，滚动到笔记列表开始位置
-// 小红书搜索结果页可能显示"点点AI"结果区（在笔记列表上方），需要跳过
 async function skipAIArea(view, wc, log) {
   try {
     // 探测页面结构：查找点点AI区域和第一个笔记的位置
@@ -305,7 +252,9 @@ async function skipAIArea(view, wc, log) {
         '.xhs-ai-chat', '[class*="ai-chat"]', '[class*="AiChat"]',
         '[class*="ai-answer"]', '[class*="search-ai"]',
         '.search-layout__ai', '.ai-search-result',
-        '[class*="summarize"]', '[class*="answer-card"]'
+        '[class*="summarize"]', '[class*="answer-card"]',
+        '[class*="ai-layout"]', '[class*="ai-layout-active"]',
+        '[class*="AiLayout"]', '[class*="ai-container"]'
       ];
       for (var i = 0; i < aiSelectors.length; i++) {
         var els = document.querySelectorAll(aiSelectors[i]);
@@ -340,10 +289,28 @@ async function skipAIArea(view, wc, log) {
     }
 
     if (info.hasAIArea && info.aiAreaH > 100) {
-      log(`  检测到点点AI区域 (y=${info.aiAreaY}, h=${info.aiAreaH})，滚动跳过...`);
-      // 滚动到AI区域下方（AI区域y + 高度 + 一些缓冲）
-      const scrollTarget = info.aiAreaY + info.aiAreaH + 100;
-      await human.mouseScroll(wc, 'down', Math.ceil(scrollTarget / 300));
+      log(`  检测到点点AI区域 (y=${info.aiAreaY}, h=${info.aiAreaH})，设置点击穿透...`);
+      // 只设置 pointer-events: none，不修改高度/显示（避免子元素 note-item 被隐藏）
+      await dom.execJS(wc, `(function(){
+        var aiSelectors = ['[class*="ai-layout"]', '[class*="ai-chat"]', '[class*="AiChat"]', '[class*="ai-answer"]', '[class*="search-ai"]', '.ai-search-result', '[class*="summarize"]', '[class*="answer-card"]', '[class*="ai-container"]'];
+        for (var i = 0; i < aiSelectors.length; i++) {
+          var els = document.querySelectorAll(aiSelectors[i]);
+          for (var j = 0; j < els.length; j++) {
+            var r = els[j].getBoundingClientRect();
+            if (r.width > 200 && r.height > 100) {
+              els[j].style.pointerEvents = 'none';
+            }
+          }
+        }
+      })()`);
+      await dom.sleep(300);
+      // 滚动到第一个笔记位置
+      if (info.firstNoteY > 0) {
+        log(`  滚动到笔记列表 (第一个笔记y=${info.firstNoteY})...`);
+        await human.mouseScroll(wc, 'down', Math.ceil(info.firstNoteY / 300));
+      } else {
+        await human.mouseScroll(wc, 'down', 3);
+      }
       await dom.sleep(1500, 2500);
       log('  ✓ 已跳过点点AI区域');
     } else {

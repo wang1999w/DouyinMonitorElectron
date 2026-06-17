@@ -567,8 +567,16 @@ class CDPInterceptor {
     let videoDesc = '';
     let videoAuthor = '';
     if (data.aweme_info) {
-      videoDesc = data.aweme_info.desc || '';
-      videoAuthor = data.aweme_info.author?.nickname || '';
+      // ⚠️ 关键安全校验：只有 aweme_info.aweme_id 与 collectTarget 一致时才使用其视频信息
+      // 防止评论 API 响应中的 aweme_info 属于另一个视频，导致 A用户数据给B用户
+      const awemeInfoId = data.aweme_info.aweme_id || '';
+      const isIdMatch = !awemeInfoId || (this.collectTarget && awemeInfoId === this.collectTarget) || awemeInfoId === aid;
+      if (isIdMatch) {
+        videoDesc = data.aweme_info.desc || '';
+        videoAuthor = data.aweme_info.author?.nickname || '';
+      } else {
+        logger.warn(`[CDP] aweme_info.aweme_id(${awemeInfoId}) 与 collectTarget(${this.collectTarget})/aid(${aid}) 不匹配，禁用 aweme_info 防止数据错配`);
+      }
     }
 
     this._touchKey(aid);

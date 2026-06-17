@@ -102,26 +102,36 @@ function initTabs() {
  * 任务日志 → 对应的任务面板（搜索/监控各自独立）
  */
 function initLogListener() {
-  // 系统级消息：调度器、CDP、环境检查等 → 运行日志
+  // ========== 核心通道：所有模块的系统日志统一发送到 system-log ==========
+  // 包含：Main主进程、StateMachine状态机、Scheduler调度器、Database数据库、
+  //      SearchEngine搜索、VideoProcessor视频处理、CDP拦截器、HTTP服务等
+  // 所有使用 logger.info/warn/error 的模块消息都通过此通道统一显示
+  if (window.electronAPI.onSystemLog) {
+    window.electronAPI.onSystemLog((data) => {
+      if (!data) return;
+      const { level, name, message } = data;
+      const prefix = level === 'ERROR' ? `[${name} ❌]` : level === 'WARN' ? `[${name} ⚠️]` : `[${name}]`;
+      appendLog(`${prefix} ${message}`, 'system');
+    });
+  }
+  // 兼容：scheduler-log（scheduler可能还在用旧通道）
   window.electronAPI.onSchedulerLog && window.electronAPI.onSchedulerLog((msg) => appendLog(msg, 'system'));
-  // 搜索任务的系统级消息（🔔通知、验证码、完成/停止） → 运行日志
-  window.electronAPI.onSearchLog((msg) => {
-    if (msg.includes('🔔') || msg.includes('✅') || msg.includes('🛑') || msg.includes('⚠️') || msg.includes('启动') || msg.includes('完成') || msg.includes('停止') || msg.includes('异常')) {
+  // 搜索任务的系统级消息（任务日志，与上面的系统日志互为补充）
+  window.electronAPI.onSearchLog && window.electronAPI.onSearchLog((msg) => {
+    if (typeof msg === 'string' && (msg.includes('🔔') || msg.includes('✅') || msg.includes('🛑') || msg.includes('⚠️') || msg.includes('启动') || msg.includes('完成') || msg.includes('停止') || msg.includes('异常'))) {
       appendLog(msg, 'system');
-    }
-    // 其他搜索日志由 search.js 面板自己处理
-  });
-  // 监控任务的系统级消息 → 运行日志
-  window.electronAPI.onMonitorLog((msg) => {
-    if (msg.includes('🔔') || msg.includes('✅') || msg.includes('🛑') || msg.includes('⚠️') || msg.includes('启动') || msg.includes('完成') || msg.includes('停止') || msg.includes('异常')) {
+    } else if (typeof msg === 'string') {
+      // 其他搜索任务日志（点击视频、处理评论等）也显示，方便排查
       appendLog(msg, 'system');
     }
   });
-  // 推荐浏览的系统级消息 → 运行日志
+  // 监控任务的系统级消息
+  window.electronAPI.onMonitorLog && window.electronAPI.onMonitorLog((msg) => {
+    if (typeof msg === 'string') appendLog(msg, 'system');
+  });
+  // 推荐浏览的系统级消息
   window.electronAPI.onRecommendLog && window.electronAPI.onRecommendLog((msg) => {
-    if (msg.includes('🔔') || msg.includes('✅') || msg.includes('🛑') || msg.includes('⚠️') || msg.includes('启动') || msg.includes('完成') || msg.includes('停止') || msg.includes('异常')) {
-      appendLog(msg, 'system');
-    }
+    if (typeof msg === 'string') appendLog(msg, 'system');
   });
 }
 

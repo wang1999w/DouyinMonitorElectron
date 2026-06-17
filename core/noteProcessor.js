@@ -47,14 +47,38 @@ async function processNote(options) {
   const pos = await dom.clickNoteById(view, noteId);
   log(`  clickNoteById结果: ${JSON.stringify(pos)}`);
   if (!pos) {
-    log(`  笔记未找到，尝试导航: ${noteId}`);
-    try {
-      await view.webContents.loadURL(`https://www.xiaohongshu.com/explore/${noteId}`);
-    } catch (e) {
-      stats.skipped = '导航失败';
-      if (cdp) cdp.endCollect(noteId);
-      return stats;
+    log(`  clickNoteById未找到可见链接，用JS触发note-item点击...`);
+    // 不导航到 /explore/{noteId}（会导致页面回到首页），而是用 JS 触发 note-item 的 click 事件
+    const clicked = await dom.execJS(wc, `(function(){
+      // 查找包含 noteId 的 section.note-item
+      var items = document.querySelectorAll('section.note-item');
+      for (var i = 0; i < items.length; i++) {
+        var links = items[i].querySelectorAll('a');
+        for (var j = 0; j < links.length; j++) {
+          var href = links[j].getAttribute('href') || '';
+          if (href.indexOf('${noteId}') !== -1) {
+            // 滚动到该 note-item
+            items[i].scrollIntoView({ block: 'center' });
+            // 触发 click 事件（用 dispatchEvent 而不是 a.click()，避免页面导航）
+            var ev = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+            links[j].dispatchEvent(ev);
+            return true;
+          }
+        }
+      }
+      return false;
+    })()`);
+    if (!clicked) {
+      log(`  JS触发点击也失败，尝试导航: ${noteId}`);
+      try {
+        await view.webContents.loadURL('https://www.xiaohongshu.com/explore/' + noteId);
+      } catch (e) {
+        stats.skipped = '导航失败';
+        if (cdp) cdp.endCollect(noteId);
+        return stats;
+      }
     }
+    await dom.sleep(2000, 3000);
   } else {
     // 使用模拟人类点击（Bezier曲线移动+悬停+点击）
     await human.humanClick(wc, pos.x, pos.y);
@@ -108,15 +132,23 @@ async function processNote(options) {
       }
     }
 
-    // 最后降级：DOM click（但只点击可见链接）
+    // 最后降级：用 JS 触发 SPA 路由（不用 a.click()，避免页面导航）
     if (!navSuccess) {
-      log('  降级用DOM click点击可见链接...');
+      log('  降级用JS触发SPA路由打开笔记...');
       await dom.execJS(wc, `(function(){
-        const links = document.querySelectorAll('a.cover[href*="/explore/${noteId}"], a.cover[href*="/search_result/${noteId}"], a.cover[href*="/discovery/item/${noteId}"], a.title[href*="/explore/${noteId}"], a.title[href*="/search_result/${noteId}"]');
-        for (const a of links) {
-          const r = a.getBoundingClientRect();
-          if (r.width > 10 && r.height > 10) { a.click(); break; }
+        // 查找 a.cover 链接（不用 a[href*="/explore/"]，避免页面导航）
+        var links = document.querySelectorAll('a.cover[href*="/search_result/${noteId}"], a.cover[href*="/explore/${noteId}"], a.title[href*="/search_result/${noteId}"], a.title[href*="/explore/${noteId}"]');
+        for (var i = 0; i < links.length; i++) {
+          var r = links[i].getBoundingClientRect();
+          if (r.width > 10 && r.height > 10) {
+            // 用 dispatchEvent 触发 click 事件，而不是 a.click()
+            // 这样 React/Vue 的 onClick 处理器会被触发，但不会导致页面导航
+            var ev = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+            links[i].dispatchEvent(ev);
+            return true;
+          }
         }
+        return false;
       })()`);
       await dom.sleep(2000, 3000);
     }
@@ -181,21 +213,78 @@ async function processNote(options) {
   }
 
   // 5. 滚动评论区加载更多评论（对标抖音模块的增强滚动）
-  // 先点击评论区内部，确保键盘事件被评论区捕获
-  const commentListPos = await dom.execJS(wc, `(function(){
-    var el = document.querySelector('.note-scroller, .comments-el, div.comment-item');
-    if (el) { var r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + 30)}; }
+  // 找到实际的滚动容器及其位置，针对它发送滚轮事件
+  const scrollContainerInfo = await dom.execJS(wc, `(function(){
+    // 候选滚动容器选择器（按优先级排序，note-container 是 XHS 笔记详情页的实际滚动容器）
+    var selectors = ['.note-container', '.note-scroller', '.comments-el', '.comment-list',
+                     '.note-content', 'div[class*="comment"]', 'div[class*="scroll"]'];
+    for (var s = 0; s < selectors.length; s++) {
+      var els = document.querySelectorAll(selectors[s]);
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        var r = el.getBoundingClientRect();
+        // 必须可见且有实际滚动空间（scrollHeight 必须大于 clientHeight）
+        if (r.width > 100 && r.height > 100 && r.top >= 0 && r.top < window.innerHeight &&
+            el.scrollHeight > el.clientHeight + 10) {
+          return {
+            x: Math.round(r.x + r.width / 2),
+            y: Math.round(r.y + r.height / 2),
+            selector: selectors[s],
+            scrollH: el.scrollHeight,
+            clientH: el.clientHeight,
+            scrollTop: el.scrollTop
+          };
+        }
+      }
+    }
+    // 降级：使用任意评论元素的父容器
+    var commentEl = document.querySelector('div.comment-item, .comment-inner');
+    if (commentEl) {
+      var parent = commentEl.parentElement;
+      while (parent && parent !== document.body) {
+        var pr = parent.getBoundingClientRect();
+        if (pr.height > 200 && (parent.scrollHeight > parent.clientHeight + 10)) {
+          return {
+            x: Math.round(pr.x + pr.width / 2),
+            y: Math.round(pr.y + pr.height / 2),
+            selector: 'parent-of-comment',
+            scrollH: parent.scrollHeight,
+            clientH: parent.clientHeight,
+            scrollTop: parent.scrollTop
+          };
+        }
+        parent = parent.parentElement;
+      }
+    }
     return null;
   })()`);
-  if (commentListPos) {
-    await human.humanClick(wc, commentListPos.x, commentListPos.y);
-    await dom.sleep(300, 600);
+  log(`  滚动容器: ${scrollContainerInfo ? JSON.stringify(scrollContainerInfo) : '未找到'}`);
+
+  // 点击评论区内部，确保键盘/滚轮事件被捕获
+  if (scrollContainerInfo) {
+    await human.humanClick(wc, scrollContainerInfo.x, scrollContainerInfo.y);
+    await dom.sleep(500, 800);
+    await human.mouseMove(wc, scrollContainerInfo.x, scrollContainerInfo.y);
+  } else {
+    // 降级：点击任意评论元素
+    const fallbackPos = await dom.execJS(wc, `(function(){
+      var el = document.querySelector('div.comment-item, .comments-el');
+      if (el) { var r = el.getBoundingClientRect(); return {x: Math.round(r.x + r.width/2), y: Math.round(r.y + 30)}; }
+      return null;
+    })()`);
+    if (fallbackPos) {
+      await human.humanClick(wc, fallbackPos.x, fallbackPos.y);
+      await dom.sleep(500, 800);
+      await human.mouseMove(wc, fallbackPos.x, fallbackPos.y);
+    }
   }
 
   let prevCommentCount = 0;
   let noNewCount = 0;
   let expiredStreak = 0;
   const maxScrollRounds = 15;
+  const scrollTargetX = scrollContainerInfo ? scrollContainerInfo.x : 600;
+  const scrollTargetY = scrollContainerInfo ? scrollContainerInfo.y : 400;
 
   for (let round = 0; round < maxScrollRounds; round++) {
     if (!shouldContinue || !shouldContinue()) break;
@@ -204,8 +293,8 @@ async function processNote(options) {
     const scrollActions = human.rand(3, 5);
     for (let i = 0; i < scrollActions; i++) {
       if (round % 2 === 0) {
-        // 偶数轮：鼠标滚轮滚动
-        await human.mouseScroll(wc, 'down', 1);
+        // 偶数轮：鼠标滚轮滚动（针对评论容器位置）
+        await human.mouseScrollAt(wc, 'down', 1, scrollTargetX, scrollTargetY);
       } else {
         // 奇数轮：键盘ArrowDown（5-10次，间隔80-200ms）
         const keyCount = human.rand(5, 10);
@@ -214,6 +303,33 @@ async function processNote(options) {
           await dom.sleep(80, 200);
         }
       }
+      // JS 滚动作为可靠补充（确保评论容器实际滚动）
+      await dom.execJS(wc, `(function(){
+        var sels = ['.note-container', '.note-scroller', '.comments-el', '.comment-list', 'div[class*="comment"]'];
+        for (var i = 0; i < sels.length; i++) {
+          var els = document.querySelectorAll(sels[i]);
+          for (var j = 0; j < els.length; j++) {
+            var el = els[j];
+            if (el.scrollHeight > el.clientHeight + 10) {
+              el.scrollBy(0, 250 + Math.floor(Math.random() * 150));
+              return true;
+            }
+          }
+        }
+        // 降级：滚动评论元素的父容器
+        var c = document.querySelector('div.comment-item');
+        if (c) {
+          var p = c.parentElement;
+          while (p && p !== document.body) {
+            if (p.scrollHeight > p.clientHeight + 10) {
+              p.scrollBy(0, 250 + Math.floor(Math.random() * 150));
+              return true;
+            }
+            p = p.parentElement;
+          }
+        }
+        return false;
+      })()`);
       await dom.sleep(600, 1200);
     }
 
@@ -222,6 +338,21 @@ async function processNote(options) {
       log('  阅读停顿...');
       await human.humanPause(wc, human.rand(2000, 5000));
     }
+
+    // 检查滚动位置变化（验证滚动是否生效）
+    const scrollInfo = await dom.execJS(wc, `(function(){
+      var sels = ['.note-container', '.note-scroller', '.comments-el', '.comment-list', 'div[class*="comment"]'];
+      for (var i = 0; i < sels.length; i++) {
+        var els = document.querySelectorAll(sels[i]);
+        for (var j = 0; j < els.length; j++) {
+          var el = els[j];
+          if (el.scrollHeight > el.clientHeight + 10) {
+            return {scrollTop: Math.round(el.scrollTop), scrollH: el.scrollHeight, clientH: el.clientHeight};
+          }
+        }
+      }
+      return null;
+    })()`);
 
     // 检查评论数（CDP优先，CDP不可用时用DOM）
     let currentCount = 0;
@@ -248,6 +379,7 @@ async function processNote(options) {
         }
       }
     }
+    log(`  [轮${round+1}] 评论数=${currentCount} 滚动=${scrollInfo ? scrollInfo.scrollTop + '/' + scrollInfo.scrollH : 'N/A'} 过期=${newExpiredCount}`);
 
     // 时效判断：连续过期评论达到阈值则提前终止（对标抖音模块）
     if (newExpiredCount > prevCommentCount * 0.5 && prevCommentCount > 5) {
@@ -267,6 +399,17 @@ async function processNote(options) {
         log('  无新评论，尝试快速滚动...');
         for (let k = 0; k < 20; k++) {
           await human.keyPress(wc, 'ArrowDown');
+          await dom.execJS(wc, `(function(){
+            var sels = ['.note-container', '.note-scroller'];
+            for (var i = 0; i < sels.length; i++) {
+              var els = document.querySelectorAll(sels[i]);
+              for (var j = 0; j < els.length; j++) {
+                if (els[j].scrollHeight > els[j].clientHeight + 10) { els[j].scrollBy(0, 100); return; }
+              }
+            }
+            var c = document.querySelector('div.comment-item');
+            if (c) { var p = c.parentElement; while(p && p !== document.body){ if(p.scrollHeight > p.clientHeight+10){ p.scrollBy(0, 100); return; } p = p.parentElement; } } })();
+          })()`);
           await dom.sleep(50, 100);
         }
         await dom.sleep(2000, 3000);
@@ -314,6 +457,8 @@ async function processNote(options) {
   const processed = new Set();
 
   let filteredShort = 0, filteredDupe = 0, filteredTime = 0, matchAttempt = 0;
+  // 记录前几条评论的时间信息用于调试
+  let debugTimeSamples = [];
 
   for (const key of allKeys) {
     if (!shouldContinue || !shouldContinue()) break;
@@ -329,7 +474,23 @@ async function processNote(options) {
     processed.add(dedupeKey);
 
     const createTime = cdpComment ? cdpComment.create_time : (domComment ? domComment.create_time : 0);
-    if (cutoffTs > 0 && createTime > 0 && createTime < cutoffTs) { filteredTime++; continue; }
+    // 严格时间过滤：cutoffTs > 0 时，评论必须有有效时间且在范围内
+    if (cutoffTs > 0) {
+      // 收集前5条评论的时间样本用于调试
+      if (debugTimeSamples.length < 5) {
+        const timeStr = createTime > 0 ? new Date(createTime * 1000).toLocaleString('zh-CN') : '无时间';
+        const cutoffStr = new Date(cutoffTs * 1000).toLocaleString('zh-CN');
+        debugTimeSamples.push({
+          text: comment.text.substring(0, 20),
+          create_time: createTime,
+          timeStr,
+          source: cdpComment ? 'cdp' : 'dom',
+          filtered: createTime <= 0 || createTime < cutoffTs
+        });
+      }
+      if (createTime <= 0) { filteredTime++; continue; } // 无时间信息的评论不采集
+      if (createTime < cutoffTs) { filteredTime++; continue; } // 超过时间范围的评论不采集
+    }
 
     matchAttempt++;
     const result = pipeline.processComment(
@@ -367,6 +528,12 @@ async function processNote(options) {
   }
 
   log(`  匹配统计: 尝试=${matchAttempt} 短文本过滤=${filteredShort} 去重过滤=${filteredDupe} 时效过滤=${filteredTime} 命中=${stats.matched}`);
+  if (cutoffTs > 0) {
+    log(`  时间过滤: cutoff=${new Date(cutoffTs * 1000).toLocaleString('zh-CN')} (60分钟内)`);
+    debugTimeSamples.forEach((s, i) => {
+      log(`    样本${i+1}: source=${s.source} time=${s.timeStr} create_time=${s.create_time} filtered=${s.filtered} text="${s.text}"`);
+    });
+  }
 
   // 10. CDP 结束采集
   if (cdp) cdp.endCollect(noteId);

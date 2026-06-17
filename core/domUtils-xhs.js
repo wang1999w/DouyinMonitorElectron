@@ -187,17 +187,21 @@ async function scanNoteLinks(view) {
       const m = href.match(/\\/explore\\/([a-f0-9]+)/) || href.match(/\\/search_result\\/([a-f0-9]+)/) || href.match(/\\/discovery\\/item\\/([a-f0-9]+)/);
       if (!m || seen.has(m[1])) continue;
       seen.add(m[1]);
-      // 提取标题
+      // 提取标题（多选择器 fallback）
       let title = '';
-      const titleEl = item.querySelector('a.title span');
-      if (titleEl) title = (titleEl.innerText || '').trim();
+      const titleEl = item.querySelector('a.title span') ||
+                       item.querySelector('a.title') ||
+                       item.querySelector('.note-title') ||
+                       item.querySelector('.title') ||
+                       item.querySelector('.desc');
+      if (titleEl) title = (titleEl.innerText || titleEl.textContent || '').trim();
       // 提取作者信息
       let author = '';
       let authorUrl = '';
-      const authorLink = item.querySelector('a.author');
+      const authorLink = item.querySelector('a.author') || item.querySelector('[class*="author"]');
       if (authorLink) {
-        const nameEl = authorLink.querySelector('span.name, div.name');
-        if (nameEl) author = (nameEl.innerText || '').trim();
+        const nameEl = authorLink.querySelector('span.name, div.name, .name, .author-name');
+        if (nameEl) author = (nameEl.innerText || nameEl.textContent || '').trim();
         authorUrl = authorLink.getAttribute('href') || '';
       }
       result.push({ noteId: m[1], title: title, author: author, authorUrl: authorUrl });
@@ -323,7 +327,13 @@ async function readDomComments(view) {
       // 6) "X小时前"
       const hourMatch = t.match(/(\\d+)小时?前/);
       if (hourMatch) return now - parseInt(hourMatch[1]) * 3600;
-      // 7) "昨天 HH:MM" 或 "昨天"
+      // 7) "今天 HH:MM" 或 "今天HH:MM"
+      const todayMatch = t.match(/今天\\s*(\\d{1,2}):(\\d{2})/);
+      if (todayMatch) {
+        const d = new Date(); d.setHours(parseInt(todayMatch[1]), parseInt(todayMatch[2]), 0, 0);
+        return Math.floor(d.getTime()/1000);
+      }
+      // 8) "昨天 HH:MM" 或 "昨天"
       if (t.match(/昨天/)) {
         const hm = t.match(/昨天\\s*(\\d{1,2}):(\\d{2})/);
         const today = new Date(); today.setHours(0,0,0,0);
@@ -331,7 +341,7 @@ async function readDomComments(view) {
         if (hm) return yesterdayStart + parseInt(hm[1]) * 3600 + parseInt(hm[2]) * 60;
         return yesterdayStart + 12 * 3600;
       }
-      // 8) "前天"
+      // 9) "前天"
       if (t.match(/前天/)) {
         const hm = t.match(/前天\\s*(\\d{1,2}):(\\d{2})/);
         const today = new Date(); today.setHours(0,0,0,0);
@@ -339,50 +349,60 @@ async function readDomComments(view) {
         if (hm) return dayBeforeStart + parseInt(hm[1]) * 3600 + parseInt(hm[2]) * 60;
         return dayBeforeStart + 12 * 3600;
       }
-      // 9) "X天前"
+      // 10) "X天前"
       const dayMatch = t.match(/(\\d+)天前/);
       if (dayMatch) return now - parseInt(dayMatch[1]) * 86400;
-      // 10) "X周前"
+      // 11) "X周前"
       const weekMatch = t.match(/(\\d+)周前/);
       if (weekMatch) return now - parseInt(weekMatch[1]) * 604800;
-      // 11) "X个月前"/"X月前"
+      // 12) "X个月前"/"X月前"
       const monthMatch = t.match(/(\\d+)个?月前/);
       if (monthMatch) return now - parseInt(monthMatch[1]) * 2592000;
-      // 12) "X年前"
+      // 13) "X年前"
       const yearMatch = t.match(/(\\d+)年前/);
       if (yearMatch) return now - parseInt(yearMatch[1]) * 31536000;
-      // 13) "M月D日 HH:MM"
+      // 14) "M月D日 HH:MM"
       const mdhmMatch = t.match(/(\\d{1,2})月(\\d{1,2})日\\s*(\\d{1,2}):(\\d{2})/);
       if (mdhmMatch) {
         const d = new Date(thisYear, parseInt(mdhmMatch[1])-1, parseInt(mdhmMatch[2]), parseInt(mdhmMatch[3]), parseInt(mdhmMatch[4]));
         if (d.getTime() > Date.now()) d.setFullYear(thisYear - 1);
         return Math.floor(d.getTime()/1000);
       }
-      // 14) "M月D日"
+      // 15) "M月D日"
       const mdMatch = t.match(/(\\d{1,2})月(\\d{1,2})日/);
       if (mdMatch) {
         const d = new Date(thisYear, parseInt(mdMatch[1])-1, parseInt(mdMatch[2]));
         if (d.getTime() > Date.now()) d.setFullYear(thisYear - 1);
         return Math.floor(d.getTime()/1000);
       }
-      // 15) "YYYY-MM-DD HH:MM" 或 "YYYY/MM/DD HH:MM"
+      // 16) "YYYY-MM-DD HH:MM" 或 "YYYY/MM/DD HH:MM"
       const ymdhmMatch = t.match(/(\\d{4})[-\\/](\\d{1,2})[-\\/](\\d{1,2})\\s*(\\d{1,2}):(\\d{2})/);
       if (ymdhmMatch) return Math.floor(new Date(parseInt(ymdhmMatch[1]), parseInt(ymdhmMatch[2])-1, parseInt(ymdhmMatch[3]), parseInt(ymdhmMatch[4]), parseInt(ymdhmMatch[5])).getTime()/1000);
-      // 16) "YYYY-MM-DD" 或 "YYYY/MM/DD"
+      // 17) "YYYY-MM-DD" 或 "YYYY/MM/DD"
       const ymdMatch = t.match(/(\\d{4})[-\\/](\\d{1,2})[-\\/](\\d{1,2})/);
       if (ymdMatch) return Math.floor(new Date(parseInt(ymdMatch[1]), parseInt(ymdMatch[2])-1, parseInt(ymdMatch[3])).getTime()/1000);
-      // 17) "MM-DD HH:MM" 或 "MM/DD HH:MM"
+      // 18) "MM-DD HH:MM" 或 "MM/DD HH:MM"
       const mdhm2Match = t.match(/(\\d{1,2})[-\\/](\\d{1,2})\\s+(\\d{1,2}):(\\d{2})/);
       if (mdhm2Match) {
         const d = new Date(thisYear, parseInt(mdhm2Match[1])-1, parseInt(mdhm2Match[2]), parseInt(mdhm2Match[3]), parseInt(mdhm2Match[4]));
         if (d.getTime() > Date.now()) d.setFullYear(thisYear - 1);
         return Math.floor(d.getTime()/1000);
       }
-      // 18) "MM-DD" 或 "MM/DD"
+      // 19) "MM-DD" 或 "MM/DD"
       const md2Match = t.match(/^(\\d{1,2})[-\\/](\\d{1,2})$/);
       if (md2Match) {
         const d = new Date(thisYear, parseInt(md2Match[1])-1, parseInt(md2Match[2]));
         if (d.getTime() > Date.now()) d.setFullYear(thisYear - 1);
+        return Math.floor(d.getTime()/1000);
+      }
+      // 20) 纯时间 "HH:MM"（当天的评论，XHS 常见格式）
+      const hmOnlyMatch = t.match(/^(\\d{1,2}):(\\d{2})$/);
+      if (hmOnlyMatch) {
+        const d = new Date(); d.setHours(parseInt(hmOnlyMatch[1]), parseInt(hmOnlyMatch[2]), 0, 0);
+        // 如果计算出的时间在未来（超过当前时间5分钟），则可能是昨天的
+        if (d.getTime() > Date.now() + 5 * 60 * 1000) {
+          d.setTime(d.getTime() - 86400 * 1000);
+        }
         return Math.floor(d.getTime()/1000);
       }
       return 0;
@@ -455,10 +475,50 @@ async function clickByText(view, text) {
   return pos;
 }
 
-module.exports = {
-  execJS, sleep, waitForElement,
-  findSearchInput, findSearchButton, setSearchInputValue,
-  clickNoteById, scanNoteLinks,
-  getCommentCount, readDomComments, scrollCommentPanel,
-  hasCaptcha, clickByText
-};
+// ========== 搜索增强辅助函数 (JS注入确保React感知) ==========
+
+// 聚焦搜索框并清空
+async function focusAndClearSearch(view) {
+  const wc = view.webContents;
+  return await execJS(wc, "(function(){var cs=document.querySelectorAll('textarea, input');var t=null;for(var i=0;i<cs.length;i++){var r=cs[i].getBoundingClientRect();if(r.width>50&&r.height>10){t=cs[i];break;}}if(!t)return false;try{t.focus();t.value='';t.dispatchEvent(new Event('input',{bubbles:true}));}catch(e){return false;}return true;})()");
+}
+
+// 用 value setter 设置搜索关键词（让 React 等框架能感知变化） 
+async function setKeywordWithSetter(view, keyword) {
+  const wc = view.webContents;
+  // 将 keyword 安全转义为 JS 字符串字面量
+  const safeKw = keyword
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '')
+    .replace(/\r/g, '');
+  const script = "(function(){var cs=document.querySelectorAll('textarea, input');var t=null;for(var i=0;i<cs.length;i++){var r=cs[i].getBoundingClientRect();if(r.width>50&&r.height>10){t=cs[i];break;}}if(!t)return false;try{t.focus();}catch(e){}var kw=\"" + safeKw + "\";try{var proto=t.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype:window.HTMLInputElement.prototype;var setter=Object.getOwnPropertyDescriptor(proto,'value').set;setter.call(t,kw);}catch(e){t.value=kw;}try{t.dispatchEvent(new Event('input',{bubbles:true}));t.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}return true;})()";
+  try {
+    const r = await execJS(wc, script);
+    return r === true || r === 'true';
+  } catch (e) { return false; }
+}
+
+// 通过JS在页面中分发键盘事件（相比 webContents.sendInputEvent 对框架更可靠）
+async function sendEnterKey(view) {
+  const wc = view.webContents;
+  return await execJS(wc, "(function(){var cs=document.querySelectorAll('textarea, input');var t=null;for(var i=0;i<cs.length;i++){var r=cs[i].getBoundingClientRect();if(r.width>50&&r.height>10){t=cs[i];break;}}if(!t)t=document.body;try{t.focus();}catch(e){}var opts={key:'Enter',code:'Enter',keyCode:13,which:13,bubbles:true,cancelable:true};var ok=false;try{t.dispatchEvent(new KeyboardEvent('keydown',opts));ok=true;}catch(e){}try{t.dispatchEvent(new KeyboardEvent('keypress',opts));ok=true;}catch(e){}try{t.dispatchEvent(new KeyboardEvent('keyup',opts));ok=true;}catch(e){}return ok;})()");
+}
+
+// 直接触发搜索导航（终极 fallback），返回新 URL
+async function loadSearchURL(view, keyword) {
+  const wc = view.webContents;
+  const url = 'https://www.xiaohongshu.com/search_result?keyword=' + encodeURIComponent(keyword) + '&source=web_explore_feed';
+  await wc.loadURL(url);
+  return true;
+}
+
+ module.exports = {
+   execJS, sleep, waitForElement,
+   findSearchInput, findSearchButton, setSearchInputValue,
+   clickNoteById, scanNoteLinks,
+   getCommentCount, readDomComments, scrollCommentPanel,
+   hasCaptcha, clickByText,
+   focusAndClearSearch, setKeywordWithSetter, sendEnterKey, loadSearchURL
+ };

@@ -61,7 +61,10 @@ async function startRecommend(params, onLog, onResult, onProgress, getViewFn, ge
   currentTask = task;
 
   const videoKeywords = params.videoKeywords || [];
-  const commentMins = params.commentHours || 60;
+  // 评论时效（小时）：默认1小时=60分钟，与搜索模块一致
+  const commentHours = params.commentHours || 1;
+  const cutoffTs = Math.floor(Date.now() / 1000) - commentHours * 3600;
+  log(`  评论时效: ${commentHours}小时 (cutoff=${new Date(cutoffTs * 1000).toLocaleString('zh-CN')})`);
   const maxComments = params.maxComments || 200;
   const endTime = params.endTime || 0;
 
@@ -76,7 +79,6 @@ async function startRecommend(params, onLog, onResult, onProgress, getViewFn, ge
     const cfg = require('./config').loadConfig();
     const intentKw = cfg.xhs_search_intent_keywords || cfg.search_intent_keywords || [];
     const garbageKw = cfg.xhs_search_garbage_keywords || cfg.search_garbage_keywords || [];
-    const cutoffTs = Math.floor(Date.now() / 1000) - commentMins * 60;
 
     // 导航到小红书首页
     log('导航到小红书首页...');
@@ -146,7 +148,8 @@ async function startRecommend(params, onLog, onResult, onProgress, getViewFn, ge
           videoInfo: {
             note_id: note.noteId,
             title: title,
-            author: '',
+            author: note.author || '',
+            author_url: note.authorUrl || '',
             note_url: `https://www.xiaohongshu.com/explore/${note.noteId}`
           }
         });

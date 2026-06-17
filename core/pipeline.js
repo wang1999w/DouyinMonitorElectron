@@ -7,7 +7,7 @@
  * 数据去重 + 关键词匹配 + 评分 + 入库 + 推送
  */
 
-const { matchIntent, calcCommentScore } = require('./match');
+const { matchIntent, calcCommentScore, calcCommentScoreAdvanced } = require('./match');
 const database = require('./database');
 const notifier = require('./notifier');
 const { getLogger } = require('./logger');
@@ -23,7 +23,7 @@ const logger = getLogger('DataPipeline');
  * @param {Object} keywords - { intent: [], garbage: [] }
  * @returns {Object|null} 处理后的完整评论数据，null 表示无效
  */
-function processComment(cdpComment, domComment, videoInfo, keywords) {
+function processComment(cdpComment, domComment, videoInfo, keywords, options) {
   const merged = mergeCommentData(cdpComment, domComment);
   if (!merged || !merged.text || merged.text.length < 3) return null;
   if (isDuplicate(merged)) return null;
@@ -44,9 +44,22 @@ function processComment(cdpComment, domComment, videoInfo, keywords) {
 
   if (!matched || isGarbage) return null;
 
-  const score = calcCommentScore(merged.create_time);
+  // ⚠️ 关键修复：优先使用动态评分函数，如果提供了 cutoffTs 和 commentHours
+  let score;
+  if (options && options.cutoffTs > 0 && options.commentHours > 0) {
+    score = calcCommentScoreAdvanced(merged.create_time, options.cutoffTs, options.commentHours);
+  } else {
+    score = calcCommentScore(merged.create_time);
+  }
 
-  // 构建完整数据（CDP + DOM 合并，补全所有字段）
+  // ⚠️ 关键安全校验：如果评论的 aweme_id 与当前视频 aweme_id 不一致，说明数据错配，跳过
+  if (merged.aweme_id && videoInfo.aweme_id && merged.aweme_id !== videoInfo.aweme_id) {
+    logger.warn(`[Pipeline] aweme_id 不匹配: 评论=${merged.aweme_id} vs 视频=${videoInfo.aweme_id}，跳过该评论防错配`);
+    return null;
+  }
+
+  // 构建完整数据（严格以 videoInfo 为视频信息来源，禁止从 merged 回退视频信息防止 A用户数据给B用户
+  const isDouyin = !merged.note_id;
   const result = {
     comment_id: merged.comment_id || generateId(),
     uid: merged.uid || merged.douyin_id || '',
@@ -57,11 +70,11 @@ function processComment(cdpComment, domComment, videoInfo, keywords) {
     profile_url: merged.profile_url || '',
     douyin_id: merged.douyin_id || merged.uid || '',
     sec_uid: merged.sec_uid || '',
-    aweme_id: videoInfo.aweme_id || merged.aweme_id || '',
-    video_desc: videoInfo.desc || merged.video_desc || '未采集',
-    video_author: videoInfo.author || merged.video_author || '未采集',
-    video_url: videoInfo.video_url || merged.video_url || `https://www.douyin.com/video/${videoInfo.aweme_id}`,
-    author_profile: videoInfo.authorProfile || merged.author_profile || '',
+    aweme_id: isDouyin ? (videoInfo.aweme_id || '') : '',
+    video_desc: isDouyin ? (videoInfo.desc || '未采集') : '',
+    video_author: isDouyin ? (videoInfo.author || '未采集') : '',
+    video_url: isDouyin ? (videoInfo.video_url || (videoInfo.aweme_id ? `https://www.douyin.com/video/${videoInfo.aweme_id}` : '')) : '',
+    author_profile: isDouyin ? (videoInfo.authorProfile || '') : '',
     matched_keywords: matchedKeywords,
     score: score,
     digg_count: merged.digg_count || 0,
@@ -81,6 +94,19 @@ function processComment(cdpComment, domComment, videoInfo, keywords) {
     database.addXHSIntentComment(result);
   } else {
     database.addIntentComment(result);
+    // 记录视频信息到 monitor_videos 表
+    if (videoInfo && videoInfo.aweme_id) {
+      try {
+        database.addMonitorVideo({
+          aweme_id: videoInfo.aweme_id,
+          blogger_sec_uid: videoInfo.blogger_sec_uid || merged.sec_uid || '',
+          desc: videoInfo.desc || '',
+          create_time: videoInfo.create_time || merged.create_time || 0
+        });
+      } catch (e) {
+        logger.warn(`记录视频信息失败: ${e.message}`);
+      }
+    }
   }
   notifier.notify(result).catch(e => logger.warn(`推送失败: ${e.message}`));
   logger.info(`[命中] ${result.nickname}: ${result.text.slice(0, 30)} -> ${matchedKeywords.join(',')} (${result.source})`);

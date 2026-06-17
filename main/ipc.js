@@ -134,20 +134,35 @@ function registerIpcHandlers(mainWindow) {
       params,
       (msg) => mainWindow.webContents.send('search-log', msg),
       (result) => mainWindow.webContents.send('search-result', result),
-      (progress) => mainWindow.webContents.send('search-progress', progress)
+      (progress) => mainWindow.webContents.send('search-progress', progress),
+      (info) => {
+        if (info && info.success === false && info.reason === 'error') {
+          mainWindow.webContents.send('task-error', { type: 'search', message: info.message || '搜索任务出错' });
+        }
+        mainWindow.webContents.send('search-completed', info || { success: true });
+      }
     );
     return { success: true };
   });
 
-  ipcMain.handle('stop-search', () => {
+  ipcMain.handle('stop-search', async () => {
     loadCoreModules();
-    searchEngine.stopSearch();
+    // ★ await stopSearch 确保状态完全清理后再返回
+    try {
+      await searchEngine.stopSearch();
+    } catch (e) {
+      console.error('stopSearch异常:', e.message);
+    }
     return { success: true };
   });
 
-  ipcMain.handle('pause-search', () => {
+  ipcMain.handle('pause-search', async () => {
     loadCoreModules();
-    searchEngine.pauseSearch();
+    try {
+      await searchEngine.pauseSearch();
+    } catch (e) {
+      console.error('pauseSearch异常:', e.message);
+    }
     return { success: true };
   });
 
@@ -156,14 +171,35 @@ function registerIpcHandlers(mainWindow) {
     loadCoreModules();
     monitorEngine.startMonitor(
       (msg) => mainWindow.webContents.send('monitor-log', msg),
-      (progress) => mainWindow.webContents.send('monitor-progress', progress)
+      (progress) => mainWindow.webContents.send('monitor-progress', progress),
+      (info) => {
+        if (info && info.success === false && info.reason === 'error') {
+          mainWindow.webContents.send('task-error', { type: 'monitor', message: info.message || '监控任务出错' });
+        }
+        mainWindow.webContents.send('monitor-completed', info || { success: true });
+      }
     );
     return { success: true };
   });
 
-  ipcMain.handle('stop-monitor', () => {
+  ipcMain.handle('stop-monitor', async () => {
     loadCoreModules();
-    monitorEngine.stopMonitor();
+    // ★ await stopMonitor 确保状态完全清理后再返回
+    try {
+      await monitorEngine.stopMonitor();
+    } catch (e) {
+      console.error('stopMonitor异常:', e.message);
+    }
+    return { success: true };
+  });
+
+  ipcMain.handle('pause-monitor', async () => {
+    loadCoreModules();
+    try {
+      await monitorEngine.pauseMonitor();
+    } catch (e) {
+      console.error('pauseMonitor异常:', e.message);
+    }
     return { success: true };
   });
 
@@ -174,20 +210,34 @@ function registerIpcHandlers(mainWindow) {
       params,
       (msg) => mainWindow.webContents.send('recommend-log', msg),
       (result) => mainWindow.webContents.send('recommend-result', result),
-      (progress) => mainWindow.webContents.send('recommend-progress', progress)
+      (progress) => mainWindow.webContents.send('recommend-progress', progress),
+      (info) => {
+        if (info && info.success === false && info.reason === 'error') {
+          mainWindow.webContents.send('task-error', { type: 'recommend', message: info.message || '推荐浏览任务出错' });
+        }
+        mainWindow.webContents.send('recommend-completed', info || { success: true });
+      }
     );
     return { success: true };
   });
 
-  ipcMain.handle('stop-recommend', () => {
+  ipcMain.handle('stop-recommend', async () => {
     loadCoreModules();
-    recommendEngine.stopRecommend();
+    try {
+      await recommendEngine.stopRecommend();
+    } catch (e) {
+      console.error('stopRecommend异常:', e.message);
+    }
     return { success: true };
   });
 
-  ipcMain.handle('pause-recommend', () => {
+  ipcMain.handle('pause-recommend', async () => {
     loadCoreModules();
-    recommendEngine.pauseRecommend();
+    try {
+      await recommendEngine.pauseRecommend();
+    } catch (e) {
+      console.error('pauseRecommend异常:', e.message);
+    }
     return { success: true };
   });
 

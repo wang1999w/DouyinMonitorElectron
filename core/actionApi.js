@@ -27,6 +27,8 @@ const match = require('./match');
 
 let getDouyinView = null;
 let searchEngine = null;
+let recommendEngine = null;
+let monitorEngine = null;
 let cdpInterceptor = null;
 let getCdpInterceptor = null;  // getter 函数（CDP 创建后才可用）
 let videoProcessor = null;
@@ -35,6 +37,8 @@ let notifier = null;
 function bind({
   getDouyinView: gv,
   searchEngine: se,
+  recommendEngine: re,
+  monitorEngine: me,
   cdpInterceptor: cdp,
   getCdpInterceptor: gCdp,
   videoProcessor: vp,
@@ -42,6 +46,8 @@ function bind({
 }) {
   if (gv) getDouyinView = gv;
   if (se) searchEngine = se;
+  if (re) recommendEngine = re;
+  if (me) monitorEngine = me;
   if (cdp) cdpInterceptor = cdp;
   if (gCdp) getCdpInterceptor = gCdp;
   if (vp) videoProcessor = vp;
@@ -641,6 +647,35 @@ async function pauseSearch() {
   } catch (e) { return fail(e.message); }
 }
 
+// ==================== 推荐任务 ====================
+
+async function startRecommend(body) {
+  if (!recommendEngine) return fail('recommendEngine_not_bound', 'NOT_READY');
+  try {
+    if (!recommendEngine.isRunning()) {
+      recommendEngine.startRecommend(body.params || body, () => {}, () => {}, () => {}, () => {});
+      return ok({ started: true, params: body.params || body });
+    }
+    return fail('recommend_already_running', 'BUSY');
+  } catch (e) { return fail(e.message); }
+}
+
+async function stopRecommend() {
+  if (!recommendEngine) return fail('recommendEngine_not_bound', 'NOT_READY');
+  try {
+    recommendEngine.stopRecommend();
+    return ok({ stopped: true });
+  } catch (e) { return fail(e.message); }
+}
+
+async function pauseRecommend() {
+  if (!recommendEngine) return fail('recommendEngine_not_bound', 'NOT_READY');
+  try {
+    recommendEngine.pauseRecommend();
+    return ok({ paused: recommendEngine.isPaused() });
+  } catch (e) { return fail(e.message); }
+}
+
 // ==================== 网络抓包 ====================
 
 /**
@@ -844,6 +879,7 @@ const ACTIONS = {
   find: findElement, findElement, dumpDOM, getCenter: getElementCenter,
   navigate, back: goBack,
   startSearch, stopSearch, pauseSearch,
+  startRecommend, stopRecommend, pauseRecommend,
   networkLog: getNetworkLog, searchNetwork: searchNetworkLog, clearNetwork: clearNetworkLog,
   getComments,
   diagnose, screenshot,
@@ -893,6 +929,7 @@ module.exports = {
   findElement, dumpDOM,
   navigate, goBack,
   startSearch, stopSearch, pauseSearch,
+  startRecommend, stopRecommend, pauseRecommend,
   getNetworkLog, searchNetworkLog, clearNetworkLog, getComments,
   runSequence, diagnose, screenshot
 };

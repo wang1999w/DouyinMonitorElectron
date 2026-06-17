@@ -13,6 +13,8 @@ const { getStateMachine, STATES } = require('../core/stateMachine');
 const { getErrorAnalyzer } = require('../core/errorAnalyzer');
 const { getRecoveryManager } = require('../core/recovery');
 const { getHttpServer } = require('../core/httpServer');
+const { getLogger, setIpcSender } = require('../core/logger');
+const logger = getLogger('Main');
 
 let mainWindow = null;
 const BLOCKED_PROTOCOLS = ['bytedance', 'sslocal', 'snssdk', 'aweme'];
@@ -124,6 +126,13 @@ function initApp() {
   mainWindow = createMainWindow();
   registerIpcHandlers(mainWindow);
 
+  // 注册系统日志 IPC 广播器（所有 logger.info/warn/error 都会发送到前端运行日志面板）
+  setIpcSender((data) => {
+    if (mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents) {
+      mainWindow.webContents.send('system-log', data);
+    }
+  });
+
   const douyinView = getDouyinView();
   if (douyinView) {
     setupWebRequest(douyinView, mainWindow);
@@ -139,18 +148,19 @@ function initApp() {
     actionApi.bind({
       getDouyinView: () => getDouyinView(),
       searchEngine,
+      recommendEngine: require('../core/recommend'),
       // 关键：传 getter 函数，不要在 init 时立即取值（CDP 还没创建）
       getCdpInterceptor: getCDPInterceptor,
       videoProcessor
     });
-    console.log('[init] actionApi 已绑定');
+    logger.info('actionApi 已绑定');
   } catch (e) {
-    console.error('[init] actionApi 绑定失败:', e.message);
+    logger.error(`actionApi 绑定失败: ${e.message}`);
   }
 
   // 监听渲染进程崩溃
   mainWindow.on('render-process-gone', (event, details) => {
-    console.error('渲染进程崩溃:', details.reason);
+    logger.error(`渲染进程崩溃: ${details.reason}`);
     notifyRenderer('error-notify', `渲染进程崩溃: ${details.reason}`);
     // 标记状态
     try {
@@ -219,15 +229,15 @@ function cleanAppCache() {
 // ========== 启动 ==========
 
 app.whenReady().then(() => {
-  // 启动前清理缓存（防止tmp文件积累导致崩溃）
+  // 启动前清理缓存
   cleanAppCache();
   // 环境自检
   const issues = envCheck();
   if (issues.length > 0) {
-    console.error('环境自检发现问题:');
-    issues.forEach(i => console.error('  - ' + i));
+    logger.error('环境自检发现问题:');
+    issues.forEach(i => logger.error('  - ' + i));
   } else {
-    console.log('环境自检通过 ✓');
+    logger.info('环境自检通过 ✓');
   }
 
   registerProtocolHandlers();
@@ -388,7 +398,7 @@ app.whenReady().then(() => {
     // 标记状态机已就绪
     getStateMachine().setPhase('ready', { httpPort: 18911 });
   } catch (e) {
-    console.error('HTTP 控制服务启动失败:', e.message);
+    logger.error(`HTTP 控制服务启动失败: ${e.message}`);
   }
 
   // 启动内存看门狗（60s 检测一次，超过 1.5GB 触发 GC + 告警）
